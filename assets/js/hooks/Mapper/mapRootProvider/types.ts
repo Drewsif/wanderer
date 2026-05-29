@@ -83,6 +83,8 @@ export type MapSettings = {
 
 export type SettingsWrapper<T> = T;
 
+import { UserSettingsRemote } from '@/hooks/Mapper/components/mapRootContent/components/MapSettings/types.ts';
+
 export type MapUserSettings = {
   migratedFromOld: boolean;
   version: number;
@@ -95,6 +97,7 @@ export type MapUserSettings = {
   signaturesWidget: SettingsWrapper<SignatureSettingsType>;
   killsWidget: SettingsWrapper<KillsWidgetSettings>;
   map: SettingsWrapper<MapSettings>;
+  userSettings?: Partial<UserSettingsRemote>;
 };
 
 export type MapUserSettingsStructure = {

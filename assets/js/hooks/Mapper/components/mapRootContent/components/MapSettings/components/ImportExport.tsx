@@ -7,12 +7,18 @@ import { SplitButton } from 'primereact/splitbutton';
 import { loadTextFile } from '@/hooks/Mapper/utils';
 import { applyMigrations } from '@/hooks/Mapper/mapRootProvider/migrations';
 import { createDefaultStoredSettings } from '@/hooks/Mapper/mapRootProvider/helpers/createDefaultStoredSettings.ts';
+import { useMapSettings } from '@/hooks/Mapper/components/mapRootContent/components/MapSettings/MapSettingsProvider.tsx';
+import { UserSettingsRemoteList } from '@/hooks/Mapper/components/mapRootContent/components/MapSettings/constants.ts';
+import { OutCommand } from '@/hooks/Mapper/types';
 
 export const ImportExport = () => {
   const {
     storedSettings: { getSettingsForExport, applySettings },
     data: { map_slug },
+    outCommand,
   } = useMapRootState();
+
+  const { settings, setUserRemoteSettings } = useMapSettings();
 
   const toast = useRef<Toast | null>(null);
 
@@ -26,6 +32,12 @@ export const ImportExport = () => {
     try {
       // INFO: WE NOT SUPPORT MIGRATIONS FOR OLD FILES AND Clipboard
       const parsed = parseMapUserSettings(text);
+      
+      if (parsed.userSettings) {
+        setUserRemoteSettings(old => ({ ...old, ...parsed.userSettings }));
+        outCommand({ type: OutCommand.updateUserSettings, data: parsed.userSettings }).catch(() => {});
+      }
+
       if (applySettings(applyMigrations(parsed) || createDefaultStoredSettings())) {
         toast.current?.show({
           severity: 'success',
@@ -64,6 +76,12 @@ export const ImportExport = () => {
 
       // INFO: WE NOT SUPPORT MIGRATIONS FOR OLD FILES AND Clipboard
       const parsed = parseMapUserSettings(text);
+
+      if (parsed.userSettings) {
+        setUserRemoteSettings(old => ({ ...old, ...parsed.userSettings }));
+        outCommand({ type: OutCommand.updateUserSettings, data: parsed.userSettings }).catch(() => {});
+      }
+
       if (applySettings(applyMigrations(parsed) || createDefaultStoredSettings())) {
         toast.current?.show({
           severity: 'success',
@@ -93,13 +111,21 @@ export const ImportExport = () => {
   }, [applySettings]);
 
   const handleExportToClipboard = useCallback(async () => {
-    const settings = getSettingsForExport();
-    if (!settings) {
+    const settingsStr = getSettingsForExport();
+    if (!settingsStr) {
       return;
     }
 
     try {
-      await navigator.clipboard.writeText(settings);
+      const baseSettings = JSON.parse(settingsStr);
+      baseSettings.userSettings = UserSettingsRemoteList.reduce((acc, prop) => {
+        if (settings[prop] !== undefined) {
+          acc[prop] = settings[prop];
+        }
+        return acc;
+      }, {} as any);
+
+      await navigator.clipboard.writeText(JSON.stringify(baseSettings));
       toast.current?.show({
         severity: 'success',
         summary: 'Export',
@@ -118,13 +144,21 @@ export const ImportExport = () => {
   }, [getSettingsForExport]);
 
   const handleExportToFile = useCallback(async () => {
-    const settings = getSettingsForExport();
-    if (!settings) {
+    const settingsStr = getSettingsForExport();
+    if (!settingsStr) {
       return;
     }
 
     try {
-      saveTextFile(`map_settings_${map_slug}.json`, settings);
+      const baseSettings = JSON.parse(settingsStr);
+      baseSettings.userSettings = UserSettingsRemoteList.reduce((acc, prop) => {
+        if (settings[prop] !== undefined) {
+          acc[prop] = settings[prop];
+        }
+        return acc;
+      }, {} as any);
+
+      saveTextFile(`map_settings_${map_slug}.json`, JSON.stringify(baseSettings));
 
       toast.current?.show({
         severity: 'success',
