@@ -10,6 +10,8 @@ import { parseMapUserSettings } from '@/hooks/Mapper/components/helpers';
 import fastDeepEqual from 'fast-deep-equal';
 import { useDetectSettingsChanged } from '@/hooks/Mapper/components/hooks';
 import { WdButton } from '@/hooks/Mapper/components/ui-kit';
+import { useMapSettings } from '@/hooks/Mapper/components/mapRootContent/components/MapSettings/MapSettingsProvider.tsx';
+import { UserSettingsRemoteList } from '@/hooks/Mapper/components/mapRootContent/components/MapSettings/constants.ts';
 
 export const AdminSettings = () => {
   const {
@@ -23,6 +25,8 @@ export const AdminSettings = () => {
 
   const { cfShow, cfHide, cfVisible, cfRef } = useConfirmPopup();
   const toast = useRef<Toast | null>(null);
+
+  const { settings } = useMapSettings();
 
   const hasSettingsForExport = useMemo(() => !!getSettingsForExport(), [getSettingsForExport]);
 
@@ -50,27 +54,46 @@ export const AdminSettings = () => {
 
   const isDirty = useMemo(() => {
     const { currentRemoteSettings, getSettingsForExport } = refVars.current;
-    const localCurrent = parseMapUserSettings(getSettingsForExport());
+    const localCurrentStr = getSettingsForExport();
+    if (!localCurrentStr) return false;
+
+    const localCurrent = parseMapUserSettings(localCurrentStr);
+    localCurrent.userSettings = UserSettingsRemoteList.reduce((acc, prop) => {
+      if (settings[prop] !== undefined) {
+        acc[prop] = settings[prop];
+      }
+      return acc;
+    }, {} as any);
 
     return !fastDeepEqual(currentRemoteSettings, localCurrent);
     // eslint-disable-next-line
-  }, [settingsChanged, currentRemoteSettings]);
+  }, [settingsChanged, currentRemoteSettings, settings]);
 
   const handleSync = useCallback(async () => {
-    const settings = getSettingsForExport();
+    const settingsStr = getSettingsForExport();
 
-    if (!settings) {
+    if (!settingsStr) {
       callToastWarn(toast.current, 'No settings to save');
 
       return;
     }
+
+    const baseSettings = JSON.parse(settingsStr);
+    baseSettings.userSettings = UserSettingsRemoteList.reduce((acc, prop) => {
+      if (settings[prop] !== undefined) {
+        acc[prop] = settings[prop];
+      }
+      return acc;
+    }, {} as any);
+
+    const settingsToSave = JSON.stringify(baseSettings);
 
     let response: { success: boolean } | undefined;
 
     try {
       response = await outCommand({
         type: OutCommand.saveDefaultSettings,
-        data: { settings },
+        data: { settings: settingsToSave },
       });
     } catch (err) {
       callToastError(toast.current, 'Something went wrong while saving settings');
@@ -83,10 +106,10 @@ export const AdminSettings = () => {
       return;
     }
 
-    setCurrentRemoteSettings(parseMapUserSettings(settings));
+    setCurrentRemoteSettings(parseMapUserSettings(settingsToSave));
 
     callToastSuccess(toast.current, 'Settings saved successfully');
-  }, [getSettingsForExport, outCommand]);
+  }, [getSettingsForExport, outCommand, settings]);
 
   return (
     <div className="w-full h-full flex flex-col gap-5">

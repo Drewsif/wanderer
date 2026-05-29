@@ -42,7 +42,13 @@ export const useActualizeRemoteMapSettings = ({
     }
 
     try {
-      applySettings(applyMigrations(JSON.parse(res.default_settings) || createDefaultStoredSettings()));
+      const parsed = JSON.parse(res.default_settings);
+
+      if (parsed.userSettings) {
+        outCommand({ type: OutCommand.updateUserSettings, data: parsed.userSettings }).catch(() => {});
+      }
+
+      applySettings(applyMigrations(parsed) || createDefaultStoredSettings());
     } catch (error) {
       applySettings(createDefaultStoredSettings());
     }
