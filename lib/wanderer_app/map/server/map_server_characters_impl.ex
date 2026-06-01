@@ -819,7 +819,12 @@ defmodule WandererApp.Map.Server.CharactersImpl do
              solar_system_id: character.solar_system_id,
              structure_id: character.structure_id,
              station_id: character.station_id
-           }, %{solar_system_id: old_solar_system_id}}
+           },
+           %{
+             solar_system_id: old_solar_system_id,
+             structure_id: old_structure_id,
+             station_id: old_station_id
+           }}
           | updates
         ],
         cache_updates
@@ -887,12 +892,26 @@ defmodule WandererApp.Map.Server.CharactersImpl do
   end
 
   defp update_location(
-         _state,
-         _character_id,
-         _location,
-         %{solar_system_id: nil}
-       ),
-       do: :ok
+         %{map: map, map_id: map_id, map_opts: map_opts} =
+           _state,
+         character_id,
+         location,
+         %{solar_system_id: nil} = old_location
+       ) do
+    scopes = get_effective_scopes(map)
+
+    if ConnectionsImpl.can_add_location(scopes, location.solar_system_id) do
+      case SystemsImpl.maybe_add_system(map_id, location, old_location, map_opts, scopes) do
+        :ok ->
+          :ok
+
+        {:error, error} ->
+          Logger.error(
+            "[CharacterTracking] Failed to add initial location system #{location.solar_system_id} for character #{character_id} on map #{map_id}: #{inspect(error)}"
+          )
+      end
+    end
+  end
 
   defp update_location(
          %{map: map, map_id: map_id, map_opts: map_opts} =
@@ -969,8 +988,8 @@ defmodule WandererApp.Map.Server.CharactersImpl do
     end
   end
 
-  defp is_character_in_space?(%{station_id: station_id, structure_id: structure_id} = _location),
-    do: is_nil(structure_id) && is_nil(station_id)
+  defp is_character_in_space?(location),
+    do: is_nil(Map.get(location, :structure_id)) && is_nil(Map.get(location, :station_id))
 
   @doc """
   Get effective scopes from map, with fallback to legacy scope.

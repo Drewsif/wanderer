@@ -979,6 +979,10 @@ defmodule WandererApp.Character.Tracker do
                             ),
                           else: acc
                       end)
+                      |> Map.put(
+                        "map:#{map_id}:character:#{character_id}:location_updated_at",
+                        DateTime.utc_now()
+                      )
 
                     _ ->
                       acc
