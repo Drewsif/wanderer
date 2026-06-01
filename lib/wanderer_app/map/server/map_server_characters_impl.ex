@@ -371,48 +371,27 @@ defmodule WandererApp.Map.Server.CharactersImpl do
   def reconcile_tracking(map_id) do
     with {:ok, tracked_settings} <-
            WandererApp.MapCharacterSettingsRepo.get_tracked_by_map_all(map_id) do
-      db_tracked_ids =
-        tracked_settings
-        |> Enum.map(fn s -> s.character_id end)
+      Enum.each(tracked_settings, fn setting ->
+        cache_key = "character:#{setting.character_id}:map:#{map_id}:tracking_start_time"
 
-      # Only consider characters that are currently present on the map
-      {:ok, presence_character_ids} =
-        WandererApp.Cache.lookup("map_#{map_id}:presence_character_ids", [])
+        case WandererApp.Cache.lookup(cache_key, nil) do
+          {:ok, nil} ->
+            Logger.info(fn ->
+              "[TrackingReconciliation] Map #{map_id} - restoring tracking for character #{setting.character_id} " <>
+                "with tracked=true in DB but missing cache key."
+            end)
 
-      presence_set = MapSet.new(presence_character_ids)
+            WandererApp.Cache.put(
+              cache_key,
+              DateTime.utc_now()
+            )
 
-      # Filter to characters that are present AND missing the tracking cache key
-      present_tracked_ids =
-        db_tracked_ids
-        |> Enum.filter(fn character_id -> MapSet.member?(presence_set, character_id) end)
+            WandererApp.Character.TrackerManager.start_tracking(setting.character_id)
 
-      restored =
-        present_tracked_ids
-        |> Enum.filter(fn character_id ->
-          cache_key = "character:#{character_id}:map:#{map_id}:tracking_start_time"
-          {:ok, val} = WandererApp.Cache.lookup(cache_key, nil)
-          is_nil(val)
-        end)
-
-      if length(restored) > 0 do
-        Logger.info(fn ->
-          "[TrackingReconciliation] Map #{map_id} - restoring #{length(restored)} characters " <>
-            "with tracked=true in DB, present in map, but missing cache key: #{inspect(restored)}"
-        end)
-
-        Enum.each(restored, fn character_id ->
-          WandererApp.Cache.put(
-            "character:#{character_id}:map:#{map_id}:tracking_start_time",
-            DateTime.utc_now()
-          )
-        end)
-
-        :telemetry.execute(
-          [:wanderer_app, :map, :tracking_reconciliation, :restored],
-          %{restored_count: length(restored), system_time: System.system_time()},
-          %{map_id: map_id, character_ids: restored}
-        )
-      end
+          _ ->
+            :ok
+        end
+      end)
 
       :ok
     else

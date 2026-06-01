@@ -141,7 +141,7 @@ to_remove = removed_signatures |> Enum.filter(fn %{"eve_id" => eve_id} -> "#{sol
           system_id
           |> get_system_signatures()
           |> Enum.filter(fn signature ->
-            is_nil(signature.linked_system) && signature.group == "Wormhole"
+            signature.group == "Wormhole"
           end)
 
         acc |> Map.put(solar_system_id, signatures)
