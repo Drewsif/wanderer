@@ -922,7 +922,8 @@ defmodule WandererApp.Character.Tracker do
 
   defp maybe_update_location(
          %{
-           character_id: character_id
+           character_id: character_id,
+           active_maps: active_maps
          } =
            state,
          location
@@ -937,6 +938,62 @@ defmodule WandererApp.Character.Tracker do
     is_location_updated?(location, solar_system_id, structure_id, station_id)
     |> case do
       true ->
+        # Pre-seed MapServer cache to prevent race conditions after server restarts
+        # This ensures that when MapServer polls the DB for the new location,
+        # it already has the old location in its cache to draw the connection.
+        if not is_nil(solar_system_id) and not Enum.empty?(active_maps) do
+          cache_keys =
+            active_maps
+            |> Enum.map(fn map_id ->
+              "map:#{map_id}:character:#{character_id}:solar_system_id"
+            end)
+
+          case WandererApp.Cache.lookup_all(cache_keys) do
+            {:ok, cached_values} ->
+              cache_updates =
+                active_maps
+                |> Enum.reduce(%{}, fn map_id, acc ->
+                  solar_system_key = "map:#{map_id}:character:#{character_id}:solar_system_id"
+
+                  case Map.get(cached_values, solar_system_key) do
+                    nil ->
+                      acc
+                      |> Map.put(solar_system_key, solar_system_id)
+                      |> then(fn acc ->
+                        if not is_nil(station_id),
+                          do:
+                            Map.put(
+                              acc,
+                              "map:#{map_id}:character:#{character_id}:station_id",
+                              station_id
+                            ),
+                          else: acc
+                      end)
+                      |> then(fn acc ->
+                        if not is_nil(structure_id),
+                          do:
+                            Map.put(
+                              acc,
+                              "map:#{map_id}:character:#{character_id}:structure_id",
+                              structure_id
+                            ),
+                          else: acc
+                      end)
+
+                    _ ->
+                      acc
+                  end
+                end)
+
+              unless Enum.empty?(cache_updates) do
+                WandererApp.Cache.insert_all(cache_updates)
+              end
+
+            _ ->
+              :ok
+          end
+        end
+
         {:ok, _character} = WandererApp.Api.Character.update_location(character, location)
         WandererApp.Character.update_character(character_id, location)
 
