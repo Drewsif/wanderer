@@ -625,9 +625,25 @@ export const handleAutoBookmark = async (
 
     const uniqueTargetSigs = Array.from(new Map(targetSigsRaw.map(sig => [sig.eve_id, sig])).values());
 
-    isReturnHole = uniqueTargetSigs.some(
-      sig => sig.linked_system?.solar_system_id?.toString() === currentSolarSystemId.toString(),
-    );
+    isReturnHole = uniqueTargetSigs.some(sig => {
+      if (sig.linked_system?.solar_system_id?.toString() !== currentSolarSystemId.toString()) {
+        return false;
+      }
+
+      if (sig.inserted_at && signature.inserted_at) {
+        return new Date(sig.inserted_at).getTime() < new Date(signature.inserted_at).getTime();
+      }
+
+      if (sig.inserted_at && !signature.inserted_at) {
+        return true;
+      }
+
+      if (!sig.inserted_at && signature.inserted_at) {
+        return false;
+      }
+
+      return info.bookmark_index == null;
+    });
 
     if (isReturnHole) {
       symbol = settings.bookmark_return_hole_symbol || '';
