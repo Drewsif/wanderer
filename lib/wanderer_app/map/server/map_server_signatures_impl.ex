@@ -23,8 +23,7 @@ defmodule WandererApp.Map.Server.SignaturesImpl do
           updated_signatures: updated_params,
           removed_signatures: removed_params
         }
-      )
-      when not is_nil(char_id) do
+      ) do
     with {:ok, system} <-
            MapSystem.read_by_map_and_solar_system(%{
              map_id: map_id,
@@ -107,7 +106,9 @@ defmodule WandererApp.Map.Server.SignaturesImpl do
     |> Enum.each(fn sig ->
       case existing_index[sig.eve_id] do
         nil ->
-          MapSystemSignature.create!(sig)
+          expires_at = calculate_expires_at(sig)
+          sig_with_expiry = sig |> Map.put(:expires_at, expires_at)
+          MapSystemSignature.create!(sig_with_expiry)
 
         existing ->
           # If signature already exists, update it instead of ignoring
@@ -117,26 +118,28 @@ defmodule WandererApp.Map.Server.SignaturesImpl do
     end)
 
     # 4. Activity tracking
-    if added_ids != [] do
-      track_activity(
-        :signatures_added,
-        map_id,
-        system.solar_system_id,
-        user_id,
-        character_id,
-        added_ids
-      )
-    end
+    if not is_nil(character_id) do
+      if added_ids != [] do
+        track_activity(
+          :signatures_added,
+          map_id,
+          system.solar_system_id,
+          user_id,
+          character_id,
+          added_ids
+        )
+      end
 
-    if removed_ids != [] do
-      track_activity(
-        :signatures_removed,
-        map_id,
-        system.solar_system_id,
-        user_id,
-        character_id,
-        removed_ids
-      )
+      if removed_ids != [] do
+        track_activity(
+          :signatures_removed,
+          map_id,
+          system.solar_system_id,
+          user_id,
+          character_id,
+          removed_ids
+        )
+      end
     end
 
     # 5. Broadcast to any live subscribers
@@ -274,15 +277,24 @@ defmodule WandererApp.Map.Server.SignaturesImpl do
     end
   end
 
+  @one_week_seconds 7 * 24 * 60 * 60
+
   def apply_update_signature(
         map_id,
         %MapSystemSignature{} = existing,
         update_params
       )
       when not is_nil(update_params) do
+    expires_at = determine_expires_at(existing, update_params)
+
+    update_params_with_expiry =
+      update_params
+      |> Map.put(:expires_at, expires_at)
+      |> Map.put(:update_forced_at, DateTime.utc_now())
+
     case MapSystemSignature.update(
            existing,
-           update_params |> Map.put(:update_forced_at, DateTime.utc_now())
+           update_params_with_expiry
          ) do
       {:ok, updated} ->
         maybe_update_connection_time_status(map_id, existing, updated)
@@ -294,6 +306,150 @@ defmodule WandererApp.Map.Server.SignaturesImpl do
         Logger.error("Failed to update signature #{existing.id}: #{inspect(reason)}")
     end
   end
+
+  defp determine_expires_at(existing, update_params) do
+    group =
+      if Map.has_key?(update_params, :group) or Map.has_key?(update_params, "group") do
+        Map.get(update_params, :group) || Map.get(update_params, "group")
+      else
+        existing.group
+      end
+
+    if group == "Wormhole" do
+      old_time_status = get_time_status(existing.custom_info)
+
+      new_custom_info =
+        if Map.has_key?(update_params, :custom_info) or Map.has_key?(update_params, "custom_info") do
+          Map.get(update_params, :custom_info) || Map.get(update_params, "custom_info")
+        else
+          existing.custom_info
+        end
+
+      new_time_status =
+        if Map.has_key?(update_params, :custom_info) or Map.has_key?(update_params, "custom_info") do
+          get_time_status(new_custom_info)
+        else
+          old_time_status
+        end
+
+      old_linked_system_id = existing.linked_system_id
+
+      new_linked_system_id =
+        if Map.has_key?(update_params, :linked_system_id) or
+             Map.has_key?(update_params, "linked_system_id") do
+          Map.get(update_params, :linked_system_id) || Map.get(update_params, "linked_system_id")
+        else
+          old_linked_system_id
+        end
+
+      old_type = existing.type
+
+      new_type =
+        if Map.has_key?(update_params, :type) or Map.has_key?(update_params, "type") do
+          Map.get(update_params, :type) || Map.get(update_params, "type")
+        else
+          old_type
+        end
+
+      time_status_changed? = old_time_status != new_time_status
+
+      extra_info_gained? =
+        (is_nil(old_linked_system_id) and not is_nil(new_linked_system_id)) or
+          (is_nil(old_type) and not is_nil(new_type))
+
+      is_blank_wh_re_pasted? =
+        is_nil(new_linked_system_id) and is_nil(new_type) and is_nil(new_time_status)
+
+      merged_params = %{
+        group: group,
+        custom_info: new_custom_info,
+        linked_system_id: new_linked_system_id,
+        type: new_type
+      }
+
+      cond do
+        time_status_changed? ->
+          calculate_expires_at(merged_params)
+
+        extra_info_gained? ->
+          calculate_expires_at(merged_params)
+
+        is_blank_wh_re_pasted? ->
+          DateTime.utc_now() |> DateTime.add(7 * 24 * 3600, :second)
+
+        true ->
+          existing.expires_at || calculate_expires_at(merged_params)
+      end
+    else
+      existing.expires_at || DateTime.utc_now() |> DateTime.add(14 * 24 * 3600, :second)
+    end
+  end
+
+  defp calculate_expires_at(sig) do
+    group = Map.get(sig, :group) || Map.get(sig, "group")
+
+    if group == "Wormhole" do
+      custom_info = Map.get(sig, :custom_info) || Map.get(sig, "custom_info")
+      time_status = get_time_status(custom_info)
+
+      cond do
+        not is_nil(time_status) and time_status > 0 ->
+          hours =
+            case time_status do
+              # _1h
+              1 -> 1
+              # _4h
+              2 -> 4
+              # _4h30m
+              3 -> 4.5
+              # _16h
+              4 -> 16
+              # _24h
+              5 -> 24
+              # _48h
+              6 -> 48
+              _ -> 24
+            end
+
+          seconds = round(hours * 3600) + 7200
+          DateTime.utc_now() |> DateTime.add(seconds, :second)
+
+        has_extra_info?(sig) ->
+          # 24h default + 2h grace = 26 hours (93,600 seconds)
+          DateTime.utc_now() |> DateTime.add(26 * 3600, :second)
+
+        true ->
+          # No extra info (just a blank wormhole signature): expires in 1 week
+          DateTime.utc_now() |> DateTime.add(@one_week_seconds, :second)
+      end
+    else
+      DateTime.utc_now() |> DateTime.add(@one_week_seconds, :second)
+    end
+  end
+
+  defp has_extra_info?(sig) do
+    linked_system_id = Map.get(sig, :linked_system_id) || Map.get(sig, "linked_system_id")
+    type = Map.get(sig, :type) || Map.get(sig, "type")
+    custom_info = Map.get(sig, :custom_info) || Map.get(sig, "custom_info")
+    not is_nil(linked_system_id) or not is_nil(type) or has_time_status?(custom_info)
+  end
+
+  defp has_time_status?(nil), do: false
+
+  defp has_time_status?(custom_info) when is_binary(custom_info) do
+    case Jason.decode(custom_info) do
+      {:ok, decoded} -> not is_nil(Map.get(decoded, "time_status"))
+      _ -> false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp has_time_status?(custom_info) when is_map(custom_info) do
+    not is_nil(Map.get(custom_info, "time_status"))
+  end
+
+  defp has_time_status?(_), do: false
 
   defp maybe_update_connection_time_status(
          map_id,
@@ -451,17 +607,35 @@ defmodule WandererApp.Map.Server.SignaturesImpl do
 
   defp get_time_status(nil), do: nil
 
-  defp get_time_status(custom_info_json) do
-    custom_info_json
-    |> Jason.decode!()
-    |> Map.get("time_status")
+  defp get_time_status(custom_info) when is_map(custom_info) do
+    Map.get(custom_info, "time_status") || Map.get(custom_info, :time_status)
   end
+
+  defp get_time_status(custom_info_json) when is_binary(custom_info_json) do
+    case Jason.decode(custom_info_json) do
+      {:ok, decoded} -> Map.get(decoded, "time_status") || Map.get(decoded, :time_status)
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp get_time_status(_), do: nil
 
   defp get_mass_status(nil), do: nil
 
-  defp get_mass_status(custom_info_json) do
-    custom_info_json
-    |> Jason.decode!()
-    |> Map.get("mass_status")
+  defp get_mass_status(custom_info) when is_map(custom_info) do
+    Map.get(custom_info, "mass_status") || Map.get(custom_info, :mass_status)
   end
+
+  defp get_mass_status(custom_info_json) when is_binary(custom_info_json) do
+    case Jason.decode(custom_info_json) do
+      {:ok, decoded} -> Map.get(decoded, "mass_status") || Map.get(decoded, :mass_status)
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp get_mass_status(_), do: nil
 end

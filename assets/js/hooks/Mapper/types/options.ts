@@ -5,6 +5,7 @@ export type StringBoolean = 'true' | 'false';
 export type MapOptions = {
   allowed_copy_for: UserPermission;
   allowed_paste_for: UserPermission;
+  auto_delete_expired_wormholes: StringBoolean;
   layout: string;
   restrict_offline_showing: StringBoolean;
   show_linked_signature_id: StringBoolean;

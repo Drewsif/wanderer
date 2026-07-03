@@ -484,6 +484,8 @@ defmodule WandererApp.Map.Server.Impl do
         options |> Map.get("show_temp_system_name", "false") |> String.to_existing_atom(),
       restrict_offline_showing:
         options |> Map.get("restrict_offline_showing", "false") |> String.to_existing_atom(),
+      auto_delete_expired_wormholes:
+        options |> Map.get("auto_delete_expired_wormholes", "false") |> String.to_existing_atom(),
       allowed_copy_for: options |> Map.get("allowed_copy_for", "admin"),
       allowed_paste_for: options |> Map.get("allowed_paste_for", "member")
     ]

@@ -10,6 +10,7 @@ defmodule WandererApp.MapRepo do
     "show_linked_signature_id_temp_name" => "false",
     "show_temp_system_name" => "false",
     "restrict_offline_showing" => "false",
+    "auto_delete_expired_wormholes" => "false",
     "allowed_copy_for" => "admin_map",
     "allowed_paste_for" => "add_system"
   }

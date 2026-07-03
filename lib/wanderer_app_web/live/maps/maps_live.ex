@@ -573,6 +573,7 @@ defmodule WandererAppWeb.MapsLive do
         "show_linked_signature_id_temp_name",
         "show_temp_system_name",
         "restrict_offline_showing",
+        "auto_delete_expired_wormholes",
         "allowed_copy_for",
         "allowed_paste_for"
       ])

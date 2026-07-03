@@ -85,7 +85,8 @@ defmodule WandererApp.Api.MapSystemSignature do
       :group,
       :type,
       :deleted,
-      :custom_info
+      :custom_info,
+      :expires_at
     ]
 
     defaults [:destroy]
@@ -126,7 +127,8 @@ defmodule WandererApp.Api.MapSystemSignature do
         :type,
         :custom_info,
         :deleted,
-        :linked_system_id
+        :linked_system_id,
+        :expires_at
       ]
     end
 
@@ -144,7 +146,8 @@ defmodule WandererApp.Api.MapSystemSignature do
         :custom_info,
         :deleted,
         :update_forced_at,
-        :linked_system_id
+        :linked_system_id,
+        :expires_at
       ]
 
       primary? true
@@ -264,6 +267,11 @@ defmodule WandererApp.Api.MapSystemSignature do
       allow_nil? true
     end
 
+    attribute :expires_at, :utc_datetime do
+      allow_nil? true
+      public? true
+    end
+
     create_timestamp(:inserted_at)
     update_timestamp(:updated_at)
   end
@@ -272,6 +280,7 @@ defmodule WandererApp.Api.MapSystemSignature do
     belongs_to :system, WandererApp.Api.MapSystem do
       attribute_writable? true
       public? true
+      read_action :unfiltered_read
     end
   end
 
@@ -294,6 +303,7 @@ defmodule WandererApp.Api.MapSystemSignature do
              :group,
              :custom_info,
              :deleted,
+             :expires_at,
              :inserted_at,
              :updated_at
            ]}

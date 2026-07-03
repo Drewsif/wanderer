@@ -93,6 +93,7 @@ const INITIAL_DATA: MapRootData = {
     allowed_paste_for: UserPermission.VIEW_SYSTEM,
     layout: '',
     restrict_offline_showing: 'false',
+    auto_delete_expired_wormholes: 'false',
     show_linked_signature_id: 'false',
     show_linked_signature_id_temp_name: 'false',
     show_temp_system_name: 'false',
