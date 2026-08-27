@@ -3,9 +3,10 @@ import {
   SignatureGroupSelect,
 } from '@/hooks/Mapper/components/mapRootContent/components/SignatureSettings/components';
 import { getSystemClassGroup } from '@/hooks/Mapper/components/map/helpers/getSystemClassGroup.ts';
+import { getSystemStaticInfo } from '@/hooks/Mapper/mapRootProvider/hooks/useLoadSystemStatic';
 import { SystemsSettingsProvider } from '@/hooks/Mapper/components/mapRootContent/components/SignatureSettings/Provider.tsx';
 import { WdButton } from '@/hooks/Mapper/components/ui-kit';
-import { handleAutoBookmark } from '@/hooks/Mapper/helpers/bookmarkFormatHelper.ts';
+import { handleAutoBookmark, applySystemAutoTags } from '@/hooks/Mapper/helpers/bookmarkFormatHelper.ts';
 import { parseSignatureCustomInfo } from '@/hooks/Mapper/helpers/parseSignatureCustomInfo';
 import { useMapRootState } from '@/hooks/Mapper/mapRootProvider';
 import { getSystemStaticInfo } from '@/hooks/Mapper/mapRootProvider/hooks/useLoadSystemStatic';
@@ -33,7 +34,7 @@ export interface MapSettingsProps {
 export const SignatureSettings = ({ systemId, show, onHide, signatureData }: MapSettingsProps) => {
   const {
     outCommand,
-    data: { systemSignatures, systems, wormholesData },
+    data: { systemSignatures, systems, wormholesData, connections },
   } = useMapRootState();
 
   const handleShow = async () => {};
@@ -123,34 +124,45 @@ export const SignatureSettings = ({ systemId, show, onHide, signatureData }: Map
       // Note: despite groups have optional type - this will always set
       out = { ...out, group: group! };
 
+      let currentSettings = userSettings;
+      if (!currentSettings) {
+        try {
+          const res: any = await outCommand({ type: OutCommand.getUserSettings, data: null });
+          currentSettings = res?.user_settings;
+        } catch (e) {
+          console.warn('Failed to fetch user settings', e);
+        }
+      }
+
       if (group === SignatureGroup.Wormhole) {
         let targetSystem = null;
         if (values.linked_system) {
-          targetSystem = systems.find((s: any) => s.system_static_info?.solar_system_id?.toString() === values.linked_system);
+          targetSystem = systems.find((s: any) => s.id === values.linked_system);
         }
 
         let targetSystemClassGroup = null;
-        if (targetSystem?.system_static_info) {
-          targetSystemClassGroup = getSystemClassGroup(targetSystem.system_static_info.system_class);
+        const targetSystemStatic = getSystemStaticInfo(values.linked_system);
+        if (targetSystemStatic) {
+          targetSystemClassGroup = getSystemClassGroup(targetSystemStatic.system_class);
         }
 
         const targetSystemUuid = targetSystem?.id;
 
         let targetSolarSystemIdStr = values.linked_system;
-        if (targetSystem?.system_static_info?.solar_system_id) {
-          targetSolarSystemIdStr = targetSystem.system_static_info.solar_system_id.toString();
+        if (targetSystemStatic?.solar_system_id) {
+          targetSolarSystemIdStr = targetSystemStatic.solar_system_id.toString();
         }
 
-        const currentSystem = systems.find((s: any) => s.id === systemId);
+        const currentSystemStatic = getSystemStaticInfo(systemId);
 
         let solarSystemIdStr = systemId;
-        if (currentSystem?.system_static_info?.solar_system_id) {
-          solarSystemIdStr = currentSystem.system_static_info.solar_system_id.toString();
+        if (currentSystemStatic?.solar_system_id) {
+          solarSystemIdStr = currentSystemStatic.solar_system_id.toString();
         }
 
         const { updatedSignature } = await handleAutoBookmark(
           out,
-          userSettings,
+          currentSettings,
           systemSignatures,
           systemId,
           solarSystemIdStr,
@@ -158,7 +170,8 @@ export const SignatureSettings = ({ systemId, show, onHide, signatureData }: Map
           targetSystemClassGroup,
           targetSystemUuid,
           targetSolarSystemIdStr,
-          getSystemStaticInfo(solarSystemIdStr)?.statics,
+          systems,
+          connections,
         );
         out = updatedSignature;
       }
@@ -186,6 +199,9 @@ export const SignatureSettings = ({ systemId, show, onHide, signatureData }: Map
             solar_system_target: values.linked_system,
           },
         });
+
+        const targetSystem = systems.find((s: any) => s.id === values.linked_system);
+        await applySystemAutoTags(out, currentSettings, targetSystem, outCommand);
       }
 
       signatureForm.reset();
@@ -201,6 +217,7 @@ export const SignatureSettings = ({ systemId, show, onHide, signatureData }: Map
       systems,
       wormholesData,
       userSettings,
+      connections,
     ],
   );
 
