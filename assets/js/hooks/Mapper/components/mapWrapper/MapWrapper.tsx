@@ -9,7 +9,20 @@ import {
 import { Connections } from '@/hooks/Mapper/components/mapRootContent/components/Connections';
 import { getSystemById } from '@/hooks/Mapper/helpers';
 import { MapRootData, useMapRootState } from '@/hooks/Mapper/mapRootProvider';
-import { CommandSelectSystems, OutCommand, OutCommandHandler, SolarSystemConnection } from '@/hooks/Mapper/types';
+import {
+  CommandSelectSystems,
+  OutCommand,
+  OutCommandHandler,
+  SolarSystemConnection,
+  SignatureGroup,
+  SignatureKind,
+  SystemSignature,
+  TimeStatus,
+  MassState,
+  ShipSizeStatus,
+} from '@/hooks/Mapper/types';
+import { calculateBookmarkIndex, applySystemAutoTags } from '@/hooks/Mapper/helpers/bookmarkFormatHelper.ts';
+import { LabelsManager } from '@/hooks/Mapper/utils/labelsManager.ts';
 import { Commands } from '@/hooks/Mapper/types/mapHandlers.ts';
 import isEqual from 'lodash.isequal';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -47,6 +60,7 @@ export const MapWrapper = () => {
       systems,
       linkSignatureToSystem,
       systemSignatures,
+      connections,
     },
     storedSettings: { interfaceSettings, settingsLocal, mapSettings, mapSettingsUpdate },
   } = useMapRootState();
@@ -82,6 +96,7 @@ export const MapWrapper = () => {
     systemContextProps,
     systems,
     systemSignatures,
+    connections,
     deleteSystems,
     mapSettingsUpdate,
   });
@@ -91,6 +106,7 @@ export const MapWrapper = () => {
     systemContextProps,
     systems,
     systemSignatures,
+    connections,
     deleteSystems,
     mapSettingsUpdate,
   };
@@ -135,13 +151,80 @@ export const MapWrapper = () => {
   }, []);
 
   const handleCommand: OutCommandHandler = useCallback(
-    event => {
+    (event: any): Promise<any> => {
       switch (event.type) {
         case OutCommand.openSettings:
           // TODO - need fix it
           // @ts-ignore
           setOpenSettings(event.data.system_id);
           break;
+        case OutCommand.manualAddConnection: {
+          const { source, target } = event.data;
+          const addConnPromise = outCommand(event);
+
+          (async () => {
+            try {
+              const { systems, connections, systemSignatures } = ref.current;
+              const res: any = await outCommand({ type: OutCommand.getUserSettings, data: null });
+              const currentSettings = res?.user_settings;
+
+              if (currentSettings?.system_auto_tag || currentSettings?.system_custom_label_name) {
+                const sourceSystem = systems.find(s => s.id === source);
+                const targetSystem = systems.find(s => s.id === target);
+
+                if (sourceSystem && targetSystem) {
+                  const hasTag = targetSystem.tag && targetSystem.tag.trim() !== '';
+                  const hasLabel = targetSystem.labels
+                    ? new LabelsManager(targetSystem.labels).customLabel?.trim() !== ''
+                    : false;
+
+                  if (!hasTag && !hasLabel) {
+                    const virtualConnection: SolarSystemConnection = {
+                      id: `${source}_${target}`,
+                      source,
+                      target,
+                      time_status: TimeStatus.reserved,
+                      mass_status: MassState.normal,
+                      ship_size_type: ShipSizeStatus.small,
+                      locked: false,
+                    };
+
+                    const separator = currentSettings?.bookmark_custom_mapping?.chain_separator || '';
+                    const calculated = calculateBookmarkIndex(
+                      systemSignatures,
+                      target,
+                      targetSystem.id,
+                      '',
+                      currentSettings?.bookmark_wormholes_start_at_zero,
+                      separator,
+                      systems,
+                      [...connections, virtualConnection],
+                    );
+
+                    const mockSignature: SystemSignature = {
+                      eve_id: '',
+                      name: '',
+                      group: SignatureGroup.Wormhole,
+                      kind: SignatureKind.CosmicSignature,
+                      type: 'wh',
+                      custom_info: JSON.stringify({
+                        bookmark_index: calculated.index,
+                        bookmark_index_chained: calculated.chained,
+                        bookmark_index_chained_letters: calculated.chainedLetters,
+                      }),
+                    };
+
+                    await applySystemAutoTags(mockSignature, currentSettings, targetSystem, outCommand);
+                  }
+                }
+              }
+            } catch (e) {
+              console.warn('Failed to auto-tag manual connection', e);
+            }
+          })();
+
+          return addConnPromise;
+        }
         default:
           return outCommand(event);
       }

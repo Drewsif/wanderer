@@ -1,4 +1,7 @@
-import { SignatureGroup, SystemSignature } from '@/hooks/Mapper/types';
+import { SignatureGroup, SystemSignature, UserSettings, OutCommand } from '@/hooks/Mapper/types';
+import { LabelsManager } from '@/hooks/Mapper/utils/labelsManager.ts';
+import { SolarSystemRawType } from '@/hooks/Mapper/types/system';
+import { SolarSystemConnection } from '@/hooks/Mapper/types/connection';
 import { parseSignatureCustomInfo } from '@/hooks/Mapper/helpers/parseSignatureCustomInfo';
 import { MassState, TimeStatus } from '@/hooks/Mapper/types/connection';
 import { WormholeDataRaw } from '@/hooks/Mapper/types/wormholes';
@@ -92,6 +95,34 @@ export const numberToLetters = (num: number, startAtZero: boolean = false): stri
   return letters;
 };
 
+export const getLocalChainSystems = (
+  startUuid: string,
+  systems: SolarSystemRawType[],
+  connections: SolarSystemConnection[],
+): SolarSystemRawType[] => {
+  const visited = new Set<string>();
+  const queue = [startUuid];
+  visited.add(startUuid);
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+
+    const neighbors = connections.filter(
+      c => (c.source === current || c.target === current) && (c.type === undefined || c.type === 0),
+    );
+
+    for (const conn of neighbors) {
+      const neighborUuid = conn.source === current ? conn.target : conn.source;
+      if (!visited.has(neighborUuid)) {
+        visited.add(neighborUuid);
+        queue.push(neighborUuid);
+      }
+    }
+  }
+
+  return systems.filter(s => visited.has(s.id));
+};
+
 export const calculateBookmarkIndex = (
   systemSignatures: Record<string, SystemSignature[]>,
   currentSystemUuid: string,
@@ -99,10 +130,13 @@ export const calculateBookmarkIndex = (
   currentEveId: string,
   startAtZero: boolean = false,
   separator: string = '',
+  systems: SolarSystemRawType[] = [],
+  connections: SolarSystemConnection[] = [],
 ): { index: number; chained: string; chainedLetters: string } => {
   let parentBookmarkIndex: string | undefined;
   let parentBookmarkIndexLetters: string | undefined;
   let oldestParentTime = Infinity;
+  let parentUuid: string | undefined;
 
   for (const [sysId, sigs] of Object.entries(systemSignatures)) {
     if (sysId === currentSystemUuid || sysId === currentSolarSystemId) continue;
@@ -124,6 +158,12 @@ export const calculateBookmarkIndex = (
           parentInfo.bookmark_index_chained_letters != null
             ? String(parentInfo.bookmark_index_chained_letters)
             : undefined;
+        const parentSys = systems.find(
+          s => s.id === sysId || s.system_static_info?.solar_system_id?.toString() === sysId,
+        );
+        if (parentSys) {
+          parentUuid = parentSys.id;
+        }
       } else if (sigTime === oldestParentTime) {
         // Fallback to shortest length if times are identical
         if (
@@ -135,6 +175,119 @@ export const calculateBookmarkIndex = (
             parentInfo.bookmark_index_chained_letters != null
               ? String(parentInfo.bookmark_index_chained_letters)
               : undefined;
+          const parentSys = systems.find(
+            s => s.id === sysId || s.system_static_info?.solar_system_id?.toString() === sysId,
+          );
+          if (parentSys) {
+            parentUuid = parentSys.id;
+          }
+        }
+      }
+    }
+  }
+
+  // If we couldn't find a parent signature linked to this system, but we have systems and connections,
+  // try to dynamically trace the parent chain using connections!
+  if (parentBookmarkIndex === undefined && systems && systems.length > 0) {
+    // 1. Direct check: If the current system itself already has a tag or temporary_name loaded,
+    // that IS the parent chain index for any signature inside it! This is extremely helpful on mid-scanning login.
+    const currentSys = systems.find(
+      s => s.id === currentSystemUuid || s.system_static_info?.solar_system_id?.toString() === currentSolarSystemId,
+    );
+    if (currentSys) {
+      const customLabel = currentSys.labels ? new LabelsManager(currentSys.labels).customLabel?.trim() : '';
+      if (customLabel && customLabel !== '') {
+        parentBookmarkIndex = customLabel;
+        parentBookmarkIndexLetters = customLabel;
+      } else if (currentSys.tag && currentSys.tag.trim() !== '') {
+        parentBookmarkIndex = currentSys.tag.trim();
+        parentBookmarkIndexLetters = currentSys.tag.trim();
+      } else if (currentSys.temporary_name && currentSys.temporary_name.trim() !== '') {
+        parentBookmarkIndex = currentSys.temporary_name.trim();
+        parentBookmarkIndexLetters = currentSys.temporary_name.trim();
+      }
+    }
+
+    // 2. Map-topology-based check: If still undefined, trace incoming connections to find parent system's chain index
+    if (parentBookmarkIndex === undefined && connections && connections.length > 0) {
+      const getSystemChainIndex = (
+        targetUuid: string,
+        visited: Set<string> = new Set(),
+      ): { indexStr: string; lettersStr: string } | null => {
+        if (visited.has(targetUuid)) return null;
+        visited.add(targetUuid);
+
+        const sys = systems.find(s => s.id === targetUuid);
+        if (!sys) return null;
+
+        // A. Check if there's a linked signature in some other system pointing to this system
+        for (const [sysId, sigs] of Object.entries(systemSignatures)) {
+          if (sysId === targetUuid || sysId === sys.system_static_info?.solar_system_id?.toString()) continue;
+          const parentSigs = sigs.filter(
+            sig =>
+              sig.linked_system?.solar_system_id?.toString() === sys.system_static_info?.solar_system_id?.toString(),
+          );
+          for (const parentSig of parentSigs) {
+            const parentInfo = parseSignatureCustomInfo(parentSig.custom_info);
+            if (parentInfo.bookmark_index === undefined) continue;
+            const chained = parentInfo.bookmark_index_chained ?? parentInfo.bookmark_index?.toString();
+            const chainedLetters =
+              parentInfo.bookmark_index_chained_letters ??
+              (parentInfo.bookmark_index_chained || parentInfo.bookmark_index?.toString());
+            if (chained) {
+              return { indexStr: String(chained), lettersStr: String(chainedLetters) };
+            }
+          }
+        }
+
+        // B. Check if the system has its own custom label, tag, or temporary_name
+        const customLabel = sys.labels ? new LabelsManager(sys.labels).customLabel?.trim() : '';
+        if (customLabel && customLabel !== '') {
+          return { indexStr: customLabel, lettersStr: customLabel };
+        }
+        if (sys.tag && sys.tag.trim() !== '') {
+          return { indexStr: sys.tag.trim(), lettersStr: sys.tag.trim() };
+        }
+        if (sys.temporary_name && sys.temporary_name.trim() !== '') {
+          return { indexStr: sys.temporary_name.trim(), lettersStr: sys.temporary_name.trim() };
+        }
+
+        // C. Check incoming connections to find parent
+        const incoming = connections.filter(c => c.target === targetUuid && (c.type === undefined || c.type === 0));
+        if (incoming.length > 0) {
+          // Pick the first incoming connection as parent
+          const parentUuid = incoming[0].source;
+          const parentChain = getSystemChainIndex(parentUuid, visited) || { indexStr: '', lettersStr: '' };
+
+          // Find siblings of the targetUuid to assign a deterministic index
+          const siblings = connections.filter(c => c.source === parentUuid && (c.type === undefined || c.type === 0));
+          siblings.sort((a, b) => a.target.localeCompare(b.target));
+          const childIndex = siblings.findIndex(c => c.target === targetUuid);
+          const relativeIndex = childIndex >= 0 ? childIndex + (startAtZero ? 0 : 1) : startAtZero ? 0 : 1;
+
+          const chained =
+            parentChain.indexStr !== '' ? `${parentChain.indexStr}${separator}${relativeIndex}` : `${relativeIndex}`;
+          const chainedLetters =
+            parentChain.lettersStr !== ''
+              ? `${parentChain.lettersStr}${separator}${relativeIndex}`
+              : numberToLetters(relativeIndex, startAtZero);
+          return { indexStr: chained, lettersStr: chainedLetters };
+        }
+
+        return null;
+      };
+
+      // Find the incoming connections to currentSystemUuid to trace parent
+      const incoming = connections.filter(
+        c => c.target === currentSystemUuid && (c.type === undefined || c.type === 0),
+      );
+      if (incoming.length > 0) {
+        const pUuid = incoming[0].source;
+        parentUuid = pUuid;
+        const parentChain = getSystemChainIndex(pUuid);
+        if (parentChain) {
+          parentBookmarkIndex = parentChain.indexStr;
+          parentBookmarkIndexLetters = parentChain.lettersStr;
         }
       }
     }
@@ -153,9 +306,73 @@ export const calculateBookmarkIndex = (
     .map(sig => parseSignatureCustomInfo(sig.custom_info).bookmark_index)
     .filter((i): i is number => typeof i === 'number' && i >= 0);
 
+  const signatureChainedTags = uniqueCurrentSigs
+    .filter(sig => sig.eve_id !== currentEveId)
+    .map(sig => {
+      const info = parseSignatureCustomInfo(sig.custom_info);
+      return [info.bookmark_index_chained, info.bookmark_index_chained_letters];
+    })
+    .flat()
+    .filter((t): t is string => typeof t === 'string' && t !== '');
+
   let i = startAtZero ? 0 : 1;
-  while (existingIndices.includes(i)) {
-    i++;
+  const rawLocalSystems =
+    parentUuid && systems && connections && connections.length > 0
+      ? getLocalChainSystems(parentUuid, systems, connections)
+      : systems;
+
+  // Filter out the target system itself so its own temporary automatic label does not pollute the collision check!
+  const localSystems = rawLocalSystems.filter(s => s.id !== currentSolarSystemId);
+
+  if (parentBookmarkIndex !== undefined && localSystems && localSystems.length > 0) {
+    const parentTag = parentBookmarkIndex;
+    const existingTags = [
+      ...localSystems
+        .map(s => {
+          const tag = s.tag?.trim();
+          const customLabel = s.labels ? new LabelsManager(s.labels).customLabel?.trim() : '';
+          return [tag, customLabel];
+        })
+        .flat(),
+      ...signatureChainedTags,
+    ].filter((t): t is string => typeof t === 'string' && t !== '');
+
+    while (true) {
+      const candidate = `${parentTag}${separator}${i}`;
+      if (existingTags.includes(candidate)) {
+        i++;
+      } else {
+        break;
+      }
+    }
+  } else if (localSystems && localSystems.length > 0) {
+    const existingTags = [
+      ...localSystems
+        .map(s => {
+          const tag = s.tag?.trim();
+          const customLabel = s.labels ? new LabelsManager(s.labels).customLabel?.trim() : '';
+          return [tag, customLabel];
+        })
+        .flat(),
+      ...signatureChainedTags,
+    ].filter((t): t is string => typeof t === 'string' && t !== '');
+
+    while (true) {
+      const candidate = numberToLetters(i, startAtZero);
+      if (existingTags.includes(candidate)) {
+        i++;
+      } else {
+        break;
+      }
+    }
+  } else {
+    while (true) {
+      if (existingIndices.includes(i)) {
+        i++;
+      } else {
+        break;
+      }
+    }
   }
 
   const chained = parentBookmarkIndex !== undefined ? `${parentBookmarkIndex}${separator}${i}` : `${i}`;
@@ -386,7 +603,7 @@ export const copyToClipboard = async (text: string) => {
 
 export const handleAutoBookmark = async (
   signature: SystemSignature,
-  currentSettings: any,
+  currentSettings: UserSettings | null | undefined,
   systemSignatures: Record<string, SystemSignature[]>,
   currentSystemId: string,
   currentSolarSystemId: string,
@@ -394,6 +611,8 @@ export const handleAutoBookmark = async (
   targetSystemClassGroup: string | null,
   targetSystemUuid?: string,
   targetSolarSystemId?: string,
+  systems: SolarSystemRawType[] = [],
+  connections: SolarSystemConnection[] = [],
 ): Promise<{ updatedSignature: SystemSignature; shouldUpdate: boolean }> => {
   let updatedSignature = signature;
   let shouldUpdate = false;
@@ -439,7 +658,7 @@ export const handleAutoBookmark = async (
     bookmarkIndexToUse = symbol;
     updatedSignature = { ...signature, custom_info: JSON.stringify(info) };
     shouldUpdate = true;
-  } else if (bookmarkIndex == null) {
+  } else {
     const separator = currentSettings?.bookmark_custom_mapping?.chain_separator || '';
     const calculated = calculateBookmarkIndex(
       systemSignatures,
@@ -448,6 +667,8 @@ export const handleAutoBookmark = async (
       signature.eve_id,
       currentSettings?.bookmark_wormholes_start_at_zero,
       separator,
+      systems,
+      connections,
     );
     bookmarkIndex = calculated.index;
     info.bookmark_index = calculated.index;
@@ -506,4 +727,85 @@ export const handleAutoBookmark = async (
   }
 
   return { updatedSignature, shouldUpdate };
+};
+
+export const applySystemAutoTags = async (
+  updatedSignature: SystemSignature,
+  currentSettings: UserSettings | null | undefined,
+  targetSystem: SolarSystemRawType | null | undefined,
+  outCommand: any,
+): Promise<void> => {
+  const systemAutoTag = currentSettings?.system_auto_tag;
+  const systemCustomLabelName = currentSettings?.system_custom_label_name;
+
+  if (!targetSystem || (!systemAutoTag && !systemCustomLabelName)) {
+    return;
+  }
+
+  const info = parseSignatureCustomInfo(updatedSignature.custom_info);
+
+  if (info.bookmark_index !== undefined) {
+    const bIndex = info.bookmark_index;
+    const startAtZero = currentSettings?.bookmark_wormholes_start_at_zero;
+    const letter = numberToLetters(bIndex, startAtZero);
+
+    if (systemAutoTag) {
+      let tagValue = '';
+      switch (systemAutoTag) {
+        case 'index':
+          tagValue = bIndex.toString();
+          break;
+        case 'chain_index':
+          tagValue = (info.bookmark_index_chained as string) || bIndex.toString();
+          break;
+        case 'index_letter':
+          tagValue = letter;
+          break;
+        case 'chain_index_letters':
+          tagValue = (info.bookmark_index_chained_letters as string) || letter;
+          break;
+      }
+
+      if (tagValue) {
+        await outCommand({
+          type: OutCommand.updateSystemTag,
+          data: {
+            system_id: targetSystem.id,
+            value: tagValue,
+          },
+        });
+      }
+    }
+
+    if (systemCustomLabelName) {
+      let labelValue = '';
+      switch (systemCustomLabelName) {
+        case 'index':
+          labelValue = bIndex.toString();
+          break;
+        case 'index_letter':
+          labelValue = letter;
+          break;
+        case 'chain_index':
+          labelValue = (info.bookmark_index_chained as string) || bIndex.toString();
+          break;
+        case 'chain_index_letters':
+          labelValue = (info.bookmark_index_chained_letters as string) || letter;
+          break;
+      }
+
+      if (labelValue) {
+        const outLabel = new LabelsManager(targetSystem.labels ?? '');
+        outLabel.updateCustomLabel(labelValue);
+
+        await outCommand({
+          type: OutCommand.updateSystemLabels,
+          data: {
+            system_id: targetSystem.id,
+            value: outLabel.toString(),
+          },
+        });
+      }
+    }
+  }
 };
