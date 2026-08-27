@@ -14,6 +14,18 @@ import {
 import { ALL_DEST_TYPES_MAP, MULTI_DEST_WHS } from '@/hooks/Mapper/constants';
 import { ShipSizeStatus } from '@/hooks/Mapper/types/connection';
 
+interface CustomBookmarkSettings {
+  bookmark_return_hole_ignore?: boolean;
+  bookmark_return_hole_symbol?: string;
+  bookmark_name_format?: string;
+  bookmark_auto_temp_name?: string;
+  bookmark_custom_mapping?: { chain_separator?: string };
+  bookmark_wormholes_start_at_zero?: boolean;
+  bookmark_auto_copy?: boolean;
+  system_auto_tag?: string;
+  system_custom_label_name?: string;
+}
+
 const getTimeStatusString = (status?: TimeStatus, mapping?: Record<string, string>): string => {
   switch (status) {
     case TimeStatus._1h:
@@ -133,10 +145,16 @@ export const calculateBookmarkIndex = (
   separator: string = '',
   systems: SolarSystemRawType[] = [],
   connections: SolarSystemConnection[] = [],
+  currentSettings?: UserSettings | null,
 ): { index: number; chained: string; chainedLetters: string } => {
   let parentBookmarkIndex: string | undefined;
   let parentBookmarkIndexLetters: string | undefined;
   let oldestParentTime = Infinity;
+
+  const settings = currentSettings as CustomBookmarkSettings | null | undefined;
+  const returnHoleSymbol = settings?.bookmark_return_hole_ignore
+    ? settings.bookmark_return_hole_symbol?.trim().toLowerCase()
+    : undefined;
 
   for (const [sysId, sigs] of Object.entries(systemSignatures)) {
     if (sysId === currentSystemUuid || sysId === currentSolarSystemId) continue;
@@ -185,13 +203,21 @@ export const calculateBookmarkIndex = (
     );
     if (currentSys) {
       const customLabel = currentSys.labels ? new LabelsManager(currentSys.labels).customLabel?.trim() : '';
-      if (customLabel && customLabel !== '') {
+      if (customLabel && customLabel !== '' && customLabel.toLowerCase() !== returnHoleSymbol) {
         parentBookmarkIndex = customLabel;
         parentBookmarkIndexLetters = customLabel;
-      } else if (currentSys.tag && currentSys.tag.trim() !== '') {
+      } else if (
+        currentSys.tag &&
+        currentSys.tag.trim() !== '' &&
+        currentSys.tag.trim().toLowerCase() !== returnHoleSymbol
+      ) {
         parentBookmarkIndex = currentSys.tag.trim();
         parentBookmarkIndexLetters = currentSys.tag.trim();
-      } else if (currentSys.temporary_name && currentSys.temporary_name.trim() !== '') {
+      } else if (
+        currentSys.temporary_name &&
+        currentSys.temporary_name.trim() !== '' &&
+        currentSys.temporary_name.trim().toLowerCase() !== returnHoleSymbol
+      ) {
         parentBookmarkIndex = currentSys.temporary_name.trim();
         parentBookmarkIndexLetters = currentSys.temporary_name.trim();
       }
@@ -230,13 +256,17 @@ export const calculateBookmarkIndex = (
 
         // B. Check if the system has its own custom label, tag, or temporary_name
         const customLabel = sys.labels ? new LabelsManager(sys.labels).customLabel?.trim() : '';
-        if (customLabel && customLabel !== '') {
+        if (customLabel && customLabel !== '' && customLabel.toLowerCase() !== returnHoleSymbol) {
           return { indexStr: customLabel, lettersStr: customLabel };
         }
-        if (sys.tag && sys.tag.trim() !== '') {
+        if (sys.tag && sys.tag.trim() !== '' && sys.tag.trim().toLowerCase() !== returnHoleSymbol) {
           return { indexStr: sys.tag.trim(), lettersStr: sys.tag.trim() };
         }
-        if (sys.temporary_name && sys.temporary_name.trim() !== '') {
+        if (
+          sys.temporary_name &&
+          sys.temporary_name.trim() !== '' &&
+          sys.temporary_name.trim().toLowerCase() !== returnHoleSymbol
+        ) {
           return { indexStr: sys.temporary_name.trim(), lettersStr: sys.temporary_name.trim() };
         }
 
@@ -602,12 +632,13 @@ export const handleAutoBookmark = async (
   systems: SolarSystemRawType[] = [],
   connections: SolarSystemConnection[] = [],
 ): Promise<{ updatedSignature: SystemSignature; shouldUpdate: boolean }> => {
+  const settings = currentSettings as CustomBookmarkSettings | null | undefined;
   let updatedSignature = signature;
   let shouldUpdate = false;
 
   if (
     signature.group !== SignatureGroup.Wormhole ||
-    (!currentSettings?.bookmark_name_format && !currentSettings?.bookmark_auto_temp_name)
+    (!settings?.bookmark_name_format && !settings?.bookmark_auto_temp_name)
   ) {
     return { updatedSignature, shouldUpdate };
   }
@@ -619,7 +650,7 @@ export const handleAutoBookmark = async (
   let isReturnHole = false;
   let symbol = '';
 
-  if (currentSettings?.bookmark_return_hole_ignore && (targetSystemUuid || targetSolarSystemId)) {
+  if (settings?.bookmark_return_hole_ignore && (targetSystemUuid || targetSolarSystemId)) {
     const targetSigsRaw = [
       ...(targetSystemUuid ? systemSignatures[targetSystemUuid] || [] : []),
       ...(targetSolarSystemId ? systemSignatures[targetSolarSystemId] || [] : []),
@@ -632,7 +663,7 @@ export const handleAutoBookmark = async (
     );
 
     if (isReturnHole) {
-      symbol = currentSettings.bookmark_return_hole_symbol || '';
+      symbol = settings.bookmark_return_hole_symbol || '';
       if (symbol === ' ') symbol = '';
     }
   }
@@ -647,16 +678,17 @@ export const handleAutoBookmark = async (
     updatedSignature = { ...signature, custom_info: JSON.stringify(info) };
     shouldUpdate = true;
   } else {
-    const separator = currentSettings?.bookmark_custom_mapping?.chain_separator || '';
+    const separator = settings?.bookmark_custom_mapping?.chain_separator || '';
     const calculated = calculateBookmarkIndex(
       systemSignatures,
       currentSystemId,
       currentSolarSystemId,
       signature.eve_id,
-      currentSettings?.bookmark_wormholes_start_at_zero,
+      settings?.bookmark_wormholes_start_at_zero,
       separator,
       systems,
       connections,
+      currentSettings,
     );
     bookmarkIndex = calculated.index;
     info.bookmark_index = calculated.index;
@@ -669,18 +701,18 @@ export const handleAutoBookmark = async (
 
   const needsTempNameUpdate =
     !updatedSignature.temporary_name ||
-    (isReturnHole && updatedSignature.temporary_name !== symbol && currentSettings?.bookmark_auto_temp_name);
+    (isReturnHole && updatedSignature.temporary_name !== symbol && settings?.bookmark_auto_temp_name);
 
-  if (currentSettings?.bookmark_auto_temp_name && needsTempNameUpdate) {
+  if (settings?.bookmark_auto_temp_name && needsTempNameUpdate) {
     let autoName = '';
-    switch (currentSettings.bookmark_auto_temp_name) {
+    switch (settings.bookmark_auto_temp_name) {
       case 'index':
         autoName = bookmarkIndexToUse.toString();
         break;
       case 'index_letter':
         autoName =
           typeof bookmarkIndexToUse === 'number'
-            ? numberToLetters(bookmarkIndexToUse, currentSettings.bookmark_wormholes_start_at_zero)
+            ? numberToLetters(bookmarkIndexToUse, settings.bookmark_wormholes_start_at_zero)
             : bookmarkIndexToUse.toString();
         break;
       case 'chain_index':
@@ -696,15 +728,15 @@ export const handleAutoBookmark = async (
     }
   }
 
-  if (currentSettings?.bookmark_name_format && currentSettings?.bookmark_auto_copy !== false) {
+  if (settings?.bookmark_name_format && settings?.bookmark_auto_copy !== false) {
     const formattedStr = formatBookmarkName(
-      currentSettings.bookmark_name_format,
+      settings.bookmark_name_format,
       updatedSignature,
       targetSystemClassGroup,
       bookmarkIndexToUse,
       wormholesData,
-      currentSettings.bookmark_wormholes_start_at_zero,
-      currentSettings.bookmark_custom_mapping,
+      settings.bookmark_wormholes_start_at_zero,
+      settings.bookmark_custom_mapping,
       systemSignatures,
       currentSystemId,
       currentSolarSystemId,
@@ -723,8 +755,9 @@ export const applySystemAutoTags = async (
   targetSystem: SolarSystemRawType | null | undefined,
   outCommand: OutCommandHandler,
 ): Promise<void> => {
-  const systemAutoTag = currentSettings?.system_auto_tag;
-  const systemCustomLabelName = currentSettings?.system_custom_label_name;
+  const settings = currentSettings as CustomBookmarkSettings | null | undefined;
+  const systemAutoTag = settings?.system_auto_tag;
+  const systemCustomLabelName = settings?.system_custom_label_name;
 
   if (!targetSystem || (!systemAutoTag && !systemCustomLabelName)) {
     return;
@@ -734,7 +767,7 @@ export const applySystemAutoTags = async (
 
   if (info.bookmark_index !== undefined) {
     const bIndex = info.bookmark_index;
-    const startAtZero = currentSettings?.bookmark_wormholes_start_at_zero;
+    const startAtZero = settings?.bookmark_wormholes_start_at_zero;
     const letter = numberToLetters(bIndex, startAtZero);
 
     if (systemAutoTag) {
