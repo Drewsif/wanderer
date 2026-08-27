@@ -1,10 +1,11 @@
-import { SignatureGroup, SystemSignature, UserSettings, OutCommand } from '@/hooks/Mapper/types';
+import { SignatureGroup, SystemSignature, UserSettings, OutCommand, OutCommandHandler } from '@/hooks/Mapper/types';
 import { LabelsManager } from '@/hooks/Mapper/utils/labelsManager.ts';
 import { SolarSystemRawType } from '@/hooks/Mapper/types/system';
 import { SolarSystemConnection } from '@/hooks/Mapper/types/connection';
 import { parseSignatureCustomInfo } from '@/hooks/Mapper/helpers/parseSignatureCustomInfo';
 import { MassState, TimeStatus } from '@/hooks/Mapper/types/connection';
 import { WormholeDataRaw } from '@/hooks/Mapper/types/wormholes';
+import { getSystemStaticInfo } from '@/hooks/Mapper/mapRootProvider/hooks/useLoadSystemStatic';
 import {
   WORMHOLES_ADDITIONAL_INFO,
   SHIP_MASSES_SIZE,
@@ -136,7 +137,6 @@ export const calculateBookmarkIndex = (
   let parentBookmarkIndex: string | undefined;
   let parentBookmarkIndexLetters: string | undefined;
   let oldestParentTime = Infinity;
-  let parentUuid: string | undefined;
 
   for (const [sysId, sigs] of Object.entries(systemSignatures)) {
     if (sysId === currentSystemUuid || sysId === currentSolarSystemId) continue;
@@ -158,12 +158,6 @@ export const calculateBookmarkIndex = (
           parentInfo.bookmark_index_chained_letters != null
             ? String(parentInfo.bookmark_index_chained_letters)
             : undefined;
-        const parentSys = systems.find(
-          s => s.id === sysId || s.system_static_info?.solar_system_id?.toString() === sysId,
-        );
-        if (parentSys) {
-          parentUuid = parentSys.id;
-        }
       } else if (sigTime === oldestParentTime) {
         // Fallback to shortest length if times are identical
         if (
@@ -175,12 +169,6 @@ export const calculateBookmarkIndex = (
             parentInfo.bookmark_index_chained_letters != null
               ? String(parentInfo.bookmark_index_chained_letters)
               : undefined;
-          const parentSys = systems.find(
-            s => s.id === sysId || s.system_static_info?.solar_system_id?.toString() === sysId,
-          );
-          if (parentSys) {
-            parentUuid = parentSys.id;
-          }
         }
       }
     }
@@ -192,7 +180,8 @@ export const calculateBookmarkIndex = (
     // 1. Direct check: If the current system itself already has a tag or temporary_name loaded,
     // that IS the parent chain index for any signature inside it! This is extremely helpful on mid-scanning login.
     const currentSys = systems.find(
-      s => s.id === currentSystemUuid || s.system_static_info?.solar_system_id?.toString() === currentSolarSystemId,
+      s =>
+        s.id === currentSystemUuid || getSystemStaticInfo(s.id)?.solar_system_id?.toString() === currentSolarSystemId,
     );
     if (currentSys) {
       const customLabel = currentSys.labels ? new LabelsManager(currentSys.labels).customLabel?.trim() : '';
@@ -220,13 +209,12 @@ export const calculateBookmarkIndex = (
         const sys = systems.find(s => s.id === targetUuid);
         if (!sys) return null;
 
+        const solarSystemIdStr = getSystemStaticInfo(sys.id)?.solar_system_id?.toString() || sys.id;
+
         // A. Check if there's a linked signature in some other system pointing to this system
         for (const [sysId, sigs] of Object.entries(systemSignatures)) {
-          if (sysId === targetUuid || sysId === sys.system_static_info?.solar_system_id?.toString()) continue;
-          const parentSigs = sigs.filter(
-            sig =>
-              sig.linked_system?.solar_system_id?.toString() === sys.system_static_info?.solar_system_id?.toString(),
-          );
+          if (sysId === targetUuid || sysId === solarSystemIdStr) continue;
+          const parentSigs = sigs.filter(sig => sig.linked_system?.solar_system_id?.toString() === solarSystemIdStr);
           for (const parentSig of parentSigs) {
             const parentInfo = parseSignatureCustomInfo(parentSig.custom_info);
             if (parentInfo.bookmark_index === undefined) continue;
@@ -283,7 +271,6 @@ export const calculateBookmarkIndex = (
       );
       if (incoming.length > 0) {
         const pUuid = incoming[0].source;
-        parentUuid = pUuid;
         const parentChain = getSystemChainIndex(pUuid);
         if (parentChain) {
           parentBookmarkIndex = parentChain.indexStr;
@@ -317,9 +304,7 @@ export const calculateBookmarkIndex = (
 
   let i = startAtZero ? 0 : 1;
   const rawLocalSystems =
-    systems && connections
-      ? getLocalChainSystems(currentSystemUuid, systems, connections)
-      : systems;
+    systems && connections ? getLocalChainSystems(currentSystemUuid, systems, connections) : systems;
 
   // Filter out the target system itself so its own temporary automatic label does not pollute the collision check!
   const localSystems = rawLocalSystems.filter(s => s.id !== currentSolarSystemId);
@@ -337,12 +322,13 @@ export const calculateBookmarkIndex = (
       ...signatureChainedTags,
     ].filter((t): t is string => typeof t === 'string' && t !== '');
 
-    while (true) {
+    let searching = true;
+    while (searching) {
       const candidate = `${parentTag}${separator}${i}`;
       if (existingTags.includes(candidate)) {
         i++;
       } else {
-        break;
+        searching = false;
       }
     }
   } else if (localSystems && localSystems.length > 0) {
@@ -357,20 +343,22 @@ export const calculateBookmarkIndex = (
       ...signatureChainedTags,
     ].filter((t): t is string => typeof t === 'string' && t !== '');
 
-    while (true) {
+    let searching = true;
+    while (searching) {
       const candidate = numberToLetters(i, startAtZero);
       if (existingTags.includes(candidate)) {
         i++;
       } else {
-        break;
+        searching = false;
       }
     }
   } else {
-    while (true) {
+    let searching = true;
+    while (searching) {
       if (existingIndices.includes(i)) {
         i++;
       } else {
-        break;
+        searching = false;
       }
     }
   }
@@ -733,7 +721,7 @@ export const applySystemAutoTags = async (
   updatedSignature: SystemSignature,
   currentSettings: UserSettings | null | undefined,
   targetSystem: SolarSystemRawType | null | undefined,
-  outCommand: any,
+  outCommand: OutCommandHandler,
 ): Promise<void> => {
   const systemAutoTag = currentSettings?.system_auto_tag;
   const systemCustomLabelName = currentSettings?.system_custom_label_name;
