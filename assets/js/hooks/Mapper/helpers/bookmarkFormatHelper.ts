@@ -317,8 +317,8 @@ export const calculateBookmarkIndex = (
 
   let i = startAtZero ? 0 : 1;
   const rawLocalSystems =
-    parentUuid && systems && connections && connections.length > 0
-      ? getLocalChainSystems(parentUuid, systems, connections)
+    systems && connections
+      ? getLocalChainSystems(currentSystemUuid, systems, connections)
       : systems;
 
   // Filter out the target system itself so its own temporary automatic label does not pollute the collision check!
