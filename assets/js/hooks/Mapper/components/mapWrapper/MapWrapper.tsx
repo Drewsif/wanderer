@@ -207,6 +207,7 @@ export const MapWrapper = ({ onShowJumpPlanner }: MapWrapperProps) => {
                       separator,
                       systems,
                       [...connections, virtualConnection],
+                      currentSettings,
                     );
 
                     const mockSignature: SystemSignature = {
