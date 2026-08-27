@@ -199,6 +199,7 @@ export const MapWrapper = () => {
                       separator,
                       systems,
                       [...connections, virtualConnection],
+                      currentSettings,
                     );
 
                     const mockSignature: SystemSignature = {
