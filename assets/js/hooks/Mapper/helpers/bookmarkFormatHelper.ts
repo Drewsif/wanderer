@@ -237,7 +237,23 @@ export const calculateBookmarkIndex = (
 
         const solarSystemIdStr = getSystemStaticInfo(sys.id)?.solar_system_id?.toString() || sys.id;
 
-        // A. Check if there's a linked signature in some other system pointing to this system
+        // A. Check if the system has its own custom label, tag, or temporary_name
+        const customLabel = sys.labels ? new LabelsManager(sys.labels).customLabel?.trim() : '';
+        if (customLabel && customLabel !== '' && customLabel.toLowerCase() !== returnHoleSymbol) {
+          return { indexStr: customLabel, lettersStr: customLabel };
+        }
+        if (sys.tag && sys.tag.trim() !== '' && sys.tag.trim().toLowerCase() !== returnHoleSymbol) {
+          return { indexStr: sys.tag.trim(), lettersStr: sys.tag.trim() };
+        }
+        if (
+          sys.temporary_name &&
+          sys.temporary_name.trim() !== '' &&
+          sys.temporary_name.trim().toLowerCase() !== returnHoleSymbol
+        ) {
+          return { indexStr: sys.temporary_name.trim(), lettersStr: sys.temporary_name.trim() };
+        }
+
+        // B. Check if there's a linked signature in some other system pointing to this system
         for (const [sysId, sigs] of Object.entries(systemSignatures)) {
           if (sysId === targetUuid || sysId === solarSystemIdStr) continue;
           const parentSigs = sigs.filter(sig => sig.linked_system?.solar_system_id?.toString() === solarSystemIdStr);
@@ -252,22 +268,6 @@ export const calculateBookmarkIndex = (
               return { indexStr: String(chained), lettersStr: String(chainedLetters) };
             }
           }
-        }
-
-        // B. Check if the system has its own custom label, tag, or temporary_name
-        const customLabel = sys.labels ? new LabelsManager(sys.labels).customLabel?.trim() : '';
-        if (customLabel && customLabel !== '' && customLabel.toLowerCase() !== returnHoleSymbol) {
-          return { indexStr: customLabel, lettersStr: customLabel };
-        }
-        if (sys.tag && sys.tag.trim() !== '' && sys.tag.trim().toLowerCase() !== returnHoleSymbol) {
-          return { indexStr: sys.tag.trim(), lettersStr: sys.tag.trim() };
-        }
-        if (
-          sys.temporary_name &&
-          sys.temporary_name.trim() !== '' &&
-          sys.temporary_name.trim().toLowerCase() !== returnHoleSymbol
-        ) {
-          return { indexStr: sys.temporary_name.trim(), lettersStr: sys.temporary_name.trim() };
         }
 
         // C. Check incoming connections to find parent
