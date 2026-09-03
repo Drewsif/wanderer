@@ -160,6 +160,20 @@ export const getLocalChainSystems = (
   return systems.filter(s => visited.has(s.id));
 };
 
+export const isValidBookmarkIndex = (tag: string, separator: string = ''): boolean => {
+  const cleaned = tag.trim();
+  if (!cleaned) return false;
+
+  const parts = separator ? cleaned.split(separator) : [cleaned];
+
+  return parts.every(part => {
+    if (!/^[A-Za-z0-9]+$/.test(part)) return false;
+    if (/^\d+$/.test(part)) return true;
+    if (/^[A-Za-z]{1,2}\d+$/.test(part)) return true;
+    return part.length <= 2;
+  });
+};
+
 export const calculateBookmarkIndex = (
   systemSignatures: Record<string, SystemSignature[]>,
   currentSystemUuid: string,
@@ -173,164 +187,83 @@ export const calculateBookmarkIndex = (
 ): { index: number; chained: string; chainedLetters: string } => {
   let parentBookmarkIndex: string | undefined;
   let parentBookmarkIndexLetters: string | undefined;
-  let oldestParentTime = Infinity;
 
   const settings = currentSettings as CustomBookmarkSettings | null | undefined;
   const returnHoleSymbol = settings?.bookmark_return_hole_ignore
     ? settings.bookmark_return_hole_symbol?.trim().toLowerCase()
     : undefined;
 
-  for (const [sysId, sigs] of Object.entries(systemSignatures)) {
-    if (sysId === currentSystemUuid || sysId === currentSolarSystemId) continue;
+  // Find the chain index of the current system by checking its own label/tag,
+  // or tracing its incoming map connections.
+  if (systems && systems.length > 0) {
+    const getSystemChainIndex = (
+      targetUuid: string,
+      visited: Set<string> = new Set(),
+    ): { indexStr: string; lettersStr: string } | null => {
+      if (visited.has(targetUuid)) return null;
+      visited.add(targetUuid);
 
-    const parentSigs = sigs.filter(sig => sig.linked_system?.solar_system_id?.toString() === currentSolarSystemId);
-    for (const parentSig of parentSigs) {
-      const parentInfo = parseSignatureCustomInfo(parentSig.custom_info);
-
-      // Return holes have their bookmark_index deleted, so we skip them to avoid hijacking the chain
-      if (parentInfo.bookmark_index === undefined) continue;
-
-      const sigTime = parentSig.inserted_at ? new Date(parentSig.inserted_at).getTime() : Infinity;
-      const currentChained = parentInfo.bookmark_index_chained ?? parentInfo.bookmark_index?.toString();
-
-      if (sigTime < oldestParentTime) {
-        oldestParentTime = sigTime;
-        parentBookmarkIndex = currentChained != null ? String(currentChained) : undefined;
-        parentBookmarkIndexLetters =
-          parentInfo.bookmark_index_chained_letters != null
-            ? String(parentInfo.bookmark_index_chained_letters)
-            : undefined;
-      } else if (sigTime === oldestParentTime) {
-        // Fallback to shortest length if times are identical
-        if (
-          !parentBookmarkIndex ||
-          (currentChained != null && String(currentChained).length < parentBookmarkIndex.length)
-        ) {
-          parentBookmarkIndex = currentChained != null ? String(currentChained) : undefined;
-          parentBookmarkIndexLetters =
-            parentInfo.bookmark_index_chained_letters != null
-              ? String(parentInfo.bookmark_index_chained_letters)
-              : undefined;
-        }
-      }
-    }
-  }
-
-  // If we couldn't find a parent signature linked to this system, but we have systems and connections,
-  // try to dynamically trace the parent chain using connections!
-  if (parentBookmarkIndex === undefined && systems && systems.length > 0) {
-    // 1. Direct check: If the current system itself already has a tag or temporary_name loaded,
-    // that IS the parent chain index for any signature inside it! This is extremely helpful on mid-scanning login.
-    const currentSys = systems.find(
-      s =>
-        s.id === currentSystemUuid || getSystemStaticInfo(s.id)?.solar_system_id?.toString() === currentSolarSystemId,
-    );
-    if (currentSys) {
-      const customLabel = currentSys.labels ? new LabelsManager(currentSys.labels).customLabel?.trim() : '';
-      if (customLabel && customLabel !== '' && customLabel.toLowerCase() !== returnHoleSymbol) {
-        parentBookmarkIndex = customLabel;
-        parentBookmarkIndexLetters = customLabel;
-      } else if (
-        currentSys.tag &&
-        currentSys.tag.trim() !== '' &&
-        currentSys.tag.trim().toLowerCase() !== returnHoleSymbol
-      ) {
-        parentBookmarkIndex = currentSys.tag.trim();
-        parentBookmarkIndexLetters = currentSys.tag.trim();
-      } else if (
-        currentSys.temporary_name &&
-        currentSys.temporary_name.trim() !== '' &&
-        currentSys.temporary_name.trim().toLowerCase() !== returnHoleSymbol
-      ) {
-        parentBookmarkIndex = currentSys.temporary_name.trim();
-        parentBookmarkIndexLetters = currentSys.temporary_name.trim();
-      }
-    }
-
-    // 2. Map-topology-based check: If still undefined, trace incoming connections to find parent system's chain index
-    if (parentBookmarkIndex === undefined && connections && connections.length > 0) {
-      const getSystemChainIndex = (
-        targetUuid: string,
-        visited: Set<string> = new Set(),
-      ): { indexStr: string; lettersStr: string } | null => {
-        if (visited.has(targetUuid)) return null;
-        visited.add(targetUuid);
-
-        const sys = systems.find(s => s.id === targetUuid);
-        if (!sys) return null;
-
-        const solarSystemIdStr = getSystemStaticInfo(sys.id)?.solar_system_id?.toString() || sys.id;
-
-        // A. Check if the system has its own custom label, tag, or temporary_name
-        const customLabel = sys.labels ? new LabelsManager(sys.labels).customLabel?.trim() : '';
-        if (customLabel && customLabel !== '' && customLabel.toLowerCase() !== returnHoleSymbol) {
-          return { indexStr: customLabel, lettersStr: customLabel };
-        }
-        if (sys.tag && sys.tag.trim() !== '' && sys.tag.trim().toLowerCase() !== returnHoleSymbol) {
-          return { indexStr: sys.tag.trim(), lettersStr: sys.tag.trim() };
-        }
-        if (
-          sys.temporary_name &&
-          sys.temporary_name.trim() !== '' &&
-          sys.temporary_name.trim().toLowerCase() !== returnHoleSymbol
-        ) {
-          return { indexStr: sys.temporary_name.trim(), lettersStr: sys.temporary_name.trim() };
-        }
-
-        // B. Check if there's a linked signature in some other system pointing to this system
-        for (const [sysId, sigs] of Object.entries(systemSignatures)) {
-          if (sysId === targetUuid || sysId === solarSystemIdStr) continue;
-          const parentSigs = sigs.filter(sig => sig.linked_system?.solar_system_id?.toString() === solarSystemIdStr);
-          for (const parentSig of parentSigs) {
-            const parentInfo = parseSignatureCustomInfo(parentSig.custom_info);
-            if (parentInfo.bookmark_index === undefined) continue;
-            const chained = parentInfo.bookmark_index_chained ?? parentInfo.bookmark_index?.toString();
-            const chainedLetters =
-              parentInfo.bookmark_index_chained_letters ??
-              (parentInfo.bookmark_index_chained || parentInfo.bookmark_index?.toString());
-            if (chained) {
-              return { indexStr: String(chained), lettersStr: String(chainedLetters) };
-            }
-          }
-        }
-
-        // C. Check incoming connections to find parent
-        const incoming = connections.filter(c => c.target === targetUuid && (c.type === undefined || c.type === 0));
-        if (incoming.length > 0) {
-          // Pick the first incoming connection as parent
-          const parentUuid = incoming[0].source;
-          const parentChain = getSystemChainIndex(parentUuid, visited) || { indexStr: '', lettersStr: '' };
-
-          // Find siblings of the targetUuid to assign a deterministic index
-          const siblings = connections.filter(c => c.source === parentUuid && (c.type === undefined || c.type === 0));
-          siblings.sort((a, b) => a.target.localeCompare(b.target));
-          const childIndex = siblings.findIndex(c => c.target === targetUuid);
-          const relativeIndex = childIndex >= 0 ? childIndex + (startAtZero ? 0 : 1) : startAtZero ? 0 : 1;
-
-          const chained =
-            parentChain.indexStr !== '' ? `${parentChain.indexStr}${separator}${relativeIndex}` : `${relativeIndex}`;
-          const chainedLetters =
-            parentChain.lettersStr !== ''
-              ? `${parentChain.lettersStr}${separator}${relativeIndex}`
-              : numberToLetters(relativeIndex, startAtZero);
-          return { indexStr: chained, lettersStr: chainedLetters };
-        }
-
-        return null;
-      };
-
-      // Find the incoming connections to currentSystemUuid to trace parent
-      const incoming = connections.filter(
-        c => c.target === currentSystemUuid && (c.type === undefined || c.type === 0),
+      const sys = systems.find(
+        s => s.id === targetUuid || getSystemStaticInfo(s.id)?.solar_system_id?.toString() === targetUuid,
       );
-      if (incoming.length > 0) {
-        const pUuid = incoming[0].source;
-        const parentChain = getSystemChainIndex(pUuid);
-        if (parentChain) {
-          parentBookmarkIndex = parentChain.indexStr;
-          parentBookmarkIndexLetters = parentChain.lettersStr;
-        }
+      if (!sys) return null;
+
+      // A. Check if the system has its own custom label, tag, or temporary_name
+      const customLabel = sys.labels ? new LabelsManager(sys.labels).customLabel?.trim() : '';
+      if (
+        customLabel &&
+        customLabel !== '' &&
+        customLabel.toLowerCase() !== returnHoleSymbol &&
+        isValidBookmarkIndex(customLabel, separator)
+      ) {
+        return { indexStr: customLabel, lettersStr: customLabel };
       }
+      if (
+        sys.tag &&
+        sys.tag.trim() !== '' &&
+        sys.tag.trim().toLowerCase() !== returnHoleSymbol &&
+        isValidBookmarkIndex(sys.tag.trim(), separator)
+      ) {
+        return { indexStr: sys.tag.trim(), lettersStr: sys.tag.trim() };
+      }
+      if (
+        sys.temporary_name &&
+        sys.temporary_name.trim() !== '' &&
+        sys.temporary_name.trim().toLowerCase() !== returnHoleSymbol &&
+        isValidBookmarkIndex(sys.temporary_name.trim(), separator)
+      ) {
+        return { indexStr: sys.temporary_name.trim(), lettersStr: sys.temporary_name.trim() };
+      }
+
+      // B. Check incoming connections to find parent
+      const incoming = connections.filter(c => c.target === targetUuid && (c.type === undefined || c.type === 0));
+      if (incoming.length > 0) {
+        // Pick the first incoming connection as parent
+        const parentUuid = incoming[0].source;
+        const parentChain = getSystemChainIndex(parentUuid, visited) || { indexStr: '', lettersStr: '' };
+
+        // Find siblings of the targetUuid to assign a deterministic index
+        const siblings = connections.filter(c => c.source === parentUuid && (c.type === undefined || c.type === 0));
+        siblings.sort((a, b) => a.target.localeCompare(b.target));
+        const childIndex = siblings.findIndex(c => c.target === targetUuid);
+        const relativeIndex = childIndex >= 0 ? childIndex + (startAtZero ? 0 : 1) : startAtZero ? 0 : 1;
+
+        const chained =
+          parentChain.indexStr !== '' ? `${parentChain.indexStr}${separator}${relativeIndex}` : `${relativeIndex}`;
+        const chainedLetters =
+          parentChain.lettersStr !== ''
+            ? `${parentChain.lettersStr}${separator}${relativeIndex}`
+            : numberToLetters(relativeIndex, startAtZero);
+        return { indexStr: chained, lettersStr: chainedLetters };
+      }
+
+      return null;
+    };
+
+    const currentChain = getSystemChainIndex(currentSystemUuid);
+    if (currentChain) {
+      parentBookmarkIndex = currentChain.indexStr;
+      parentBookmarkIndexLetters = currentChain.lettersStr;
     }
   }
 
