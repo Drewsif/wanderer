@@ -192,8 +192,8 @@ export const MapWrapper = () => {
                     const separator = currentSettings?.bookmark_custom_mapping?.chain_separator || '';
                     const calculated = calculateBookmarkIndex(
                       systemSignatures,
-                      target,
-                      targetSystem.id,
+                      source,
+                      sourceSystem.id,
                       '',
                       currentSettings?.bookmark_wormholes_start_at_zero,
                       separator,
