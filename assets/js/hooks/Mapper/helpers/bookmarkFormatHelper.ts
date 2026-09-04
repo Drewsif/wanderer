@@ -160,6 +160,7 @@ export const calculateBookmarkIndex = (
   systems: SolarSystemRawType[] = [],
   connections: SolarSystemConnection[] = [],
   currentSettings?: UserSettings | null,
+  targetSystemUuid?: string,
 ): { index: number; chained: string; chainedLetters: string } => {
   let parentBookmarkIndex: string | undefined;
   let parentBookmarkIndexLetters: string | undefined;
@@ -252,12 +253,12 @@ export const calculateBookmarkIndex = (
   const uniqueCurrentSigs = Array.from(new Map(currentSigsRaw.map(sig => [sig.eve_id, sig])).values());
 
   const existingIndices = uniqueCurrentSigs
-    .filter(sig => sig.eve_id !== currentEveId)
+    .filter(sig => sig.eve_id !== currentEveId && sig.linked_system != null)
     .map(sig => parseSignatureCustomInfo(sig.custom_info).bookmark_index)
     .filter((i): i is number => typeof i === 'number' && i >= 0);
 
   const signatureChainedTags = uniqueCurrentSigs
-    .filter(sig => sig.eve_id !== currentEveId)
+    .filter(sig => sig.eve_id !== currentEveId && sig.linked_system != null)
     .map(sig => {
       const info = parseSignatureCustomInfo(sig.custom_info);
       return [info.bookmark_index_chained, info.bookmark_index_chained_letters];
@@ -270,7 +271,9 @@ export const calculateBookmarkIndex = (
     systems && connections ? getLocalChainSystems(currentSystemUuid, systems, connections) : systems;
 
   // Filter out the target system itself so its own temporary automatic label does not pollute the collision check!
-  const localSystems = rawLocalSystems.filter(s => s.id !== currentSolarSystemId);
+  const localSystems = rawLocalSystems.filter(
+    s => s.id !== currentSolarSystemId && s.linked_sig_eve_id !== currentEveId && s.id !== targetSystemUuid,
+  );
 
   if (parentBookmarkIndex !== undefined && localSystems && localSystems.length > 0) {
     const parentTag = parentBookmarkIndex;
@@ -622,6 +625,7 @@ export const handleAutoBookmark = async (
       systems,
       connections,
       currentSettings,
+      targetSystemUuid,
     );
     bookmarkIndex = calculated.index;
     info.bookmark_index = calculated.index;
