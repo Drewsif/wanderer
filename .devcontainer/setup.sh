@@ -10,7 +10,7 @@ if mix help | grep -q "ecto.create"; then
   echo "→ waiting for database to be ready..."
 
   # Wait for database to be ready
-  DB_HOST=${DB_HOST:-db}
+  export DB_HOST=${DB_HOST:-db}
   timeout=60
   while ! nc -z $DB_HOST 5432 2>/dev/null; do
     if [ $timeout -eq 0 ]; then
