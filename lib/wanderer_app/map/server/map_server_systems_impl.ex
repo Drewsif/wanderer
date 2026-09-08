@@ -1121,6 +1121,8 @@ defmodule WandererApp.Map.Server.SystemsImpl do
     :ok
   end
 
+  defp maybe_sync_to_signatures(map_id, {:ok, system}), do: maybe_sync_to_signatures(map_id, system)
+
   defp maybe_sync_to_signatures(map_id, %{solar_system_id: solar_system_id} = system) do
     case WandererApp.Api.MapSystemSignature.by_linked_system_id(solar_system_id) do
       {:ok, signatures} ->
@@ -1143,6 +1145,8 @@ defmodule WandererApp.Map.Server.SystemsImpl do
         :ok
     end
   end
+
+  defp maybe_sync_to_signatures(_map_id, _), do: :ok
 
   defp get_sync_value(system) do
     label_val = get_label_value(system.labels)
