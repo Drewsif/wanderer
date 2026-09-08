@@ -2,6 +2,15 @@
 
 <!-- changelog -->
 
+## [v1.101.15](https://github.com/wanderer-industries/wanderer/compare/v1.101.14...v1.101.15) (2026-09-08)
+
+
+
+
+### Bug Fixes:
+
+* map: support {:ok, system} tuples in maybe_sync_to_signatures/2
+
 ## [v1.101.14](https://github.com/wanderer-industries/wanderer/compare/v1.101.13...v1.101.14) (2026-09-03)
 
 
