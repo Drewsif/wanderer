@@ -296,47 +296,26 @@ export const calculateBookmarkIndex = (
 
   // Filter out the target system itself so its own temporary automatic label does not pollute the collision check!
   const localSystems = rawLocalSystems.filter(
-    s => s.id !== currentSolarSystemId && s.linked_sig_eve_id !== currentEveId && s.id !== targetSystemUuid,
+    s => s.id !== currentSystemUuid && s.linked_sig_eve_id !== currentEveId && s.id !== targetSystemUuid,
   );
 
-  if (parentBookmarkIndex !== undefined && localSystems && localSystems.length > 0) {
-    const parentTag = parentBookmarkIndex;
-    const existingTags = [
-      ...localSystems
-        .map(s => {
-          const tag = s.tag?.trim();
-          const customLabel = s.labels ? new LabelsManager(s.labels).customLabel?.trim() : '';
-          return [tag, customLabel];
-        })
-        .flat(),
-      ...signatureChainedTags,
-    ].filter((t): t is string => typeof t === 'string' && t !== '');
+  const existingTags = [
+    ...(localSystems || [])
+      .map(s => {
+        const tag = s.tag?.trim();
+        const customLabel = s.labels ? new LabelsManager(s.labels).customLabel?.trim() : '';
+        return [tag, customLabel];
+      })
+      .flat(),
+    ...signatureChainedTags,
+  ].filter((t): t is string => typeof t === 'string' && t !== '');
 
+  if (parentBookmarkIndex !== undefined) {
+    const parentTag = parentBookmarkIndex;
     let searching = true;
     while (searching) {
       const candidate = `${parentTag}${separator}${i}`;
-      if (existingTags.includes(candidate)) {
-        i++;
-      } else {
-        searching = false;
-      }
-    }
-  } else if (localSystems && localSystems.length > 0) {
-    const existingTags = [
-      ...localSystems
-        .map(s => {
-          const tag = s.tag?.trim();
-          const customLabel = s.labels ? new LabelsManager(s.labels).customLabel?.trim() : '';
-          return [tag, customLabel];
-        })
-        .flat(),
-      ...signatureChainedTags,
-    ].filter((t): t is string => typeof t === 'string' && t !== '');
-
-    let searching = true;
-    while (searching) {
-      const candidate = numberToLetters(i, startAtZero);
-      if (existingTags.includes(candidate)) {
+      if (existingTags.includes(candidate) || existingIndices.includes(i)) {
         i++;
       } else {
         searching = false;
@@ -345,7 +324,8 @@ export const calculateBookmarkIndex = (
   } else {
     let searching = true;
     while (searching) {
-      if (existingIndices.includes(i)) {
+      const candidateTag = numberToLetters(i, startAtZero);
+      if (existingTags.includes(candidateTag) || existingIndices.includes(i)) {
         i++;
       } else {
         searching = false;
