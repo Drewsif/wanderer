@@ -848,6 +848,7 @@ defmodule WandererApp.Map.Server.SystemsImpl do
               |> WandererApp.MapSystemRepo.cleanup_linked_sig_eve_id!()
               |> maybe_update_extra_info(extra_info)
               |> WandererApp.MapSystemRepo.update_visible(%{visible: true})
+              |> tap(&maybe_sync_to_signatures(map_id, &1))
             end
 
           _ ->
@@ -987,18 +988,6 @@ defmodule WandererApp.Map.Server.SystemsImpl do
   defp maybe_update_name(system, _name), do: system
 
   defp maybe_update_labels(
-         %{name: old_labels} = system,
-         labels
-       )
-       when not is_nil(labels) and old_labels != labels do
-    {:ok, updated_system} =
-      system
-      |> WandererApp.MapSystemRepo.update_labels(%{labels: labels})
-
-    updated_system
-  end
-
-  defp maybe_update_labels(
          %{labels: old_labels} = system,
          labels
        )
@@ -1013,7 +1002,7 @@ defmodule WandererApp.Map.Server.SystemsImpl do
   defp maybe_update_labels(system, _labels), do: system
 
   defp maybe_update_status(
-         %{name: old_status} = system,
+         %{status: old_status} = system,
          status
        )
        when not is_nil(status) and old_status != status do
@@ -1027,7 +1016,7 @@ defmodule WandererApp.Map.Server.SystemsImpl do
   defp maybe_update_status(system, _status), do: system
 
   defp maybe_update_tag(
-         %{name: old_tag} = system,
+         %{tag: old_tag} = system,
          tag
        )
        when not is_nil(tag) and old_tag != tag do
@@ -1038,10 +1027,10 @@ defmodule WandererApp.Map.Server.SystemsImpl do
     updated_system
   end
 
-  defp maybe_update_tag(system, _labels), do: system
+  defp maybe_update_tag(system, _tag), do: system
 
   defp maybe_update_temporary_name(
-         %{name: old_temporary_name} = system,
+         %{temporary_name: old_temporary_name} = system,
          temporary_name
        )
        when not is_nil(temporary_name) and old_temporary_name != temporary_name do
@@ -1086,6 +1075,10 @@ defmodule WandererApp.Map.Server.SystemsImpl do
         callback_fn.(updated_system)
       end
 
+      if update_method in [:update_tag, :update_labels, :update_temporary_name] do
+        maybe_sync_to_signatures(map_id, updated_system)
+      end
+
       update_map_system_last_activity(map_id, updated_system)
     else
       {:error, error} ->
@@ -1127,4 +1120,61 @@ defmodule WandererApp.Map.Server.SystemsImpl do
 
     :ok
   end
+
+  defp maybe_sync_to_signatures(map_id, %{solar_system_id: solar_system_id} = system) do
+    case WandererApp.Api.MapSystemSignature.by_linked_system_id(solar_system_id) do
+      {:ok, signatures} ->
+        sync_value = get_sync_value(system)
+
+        signatures
+        |> Enum.filter(fn sig -> sig.temporary_name != sync_value end)
+        |> Enum.each(fn sig ->
+          case WandererApp.Api.MapSystem.by_id(sig.system_id) do
+            {:ok, source_system} ->
+              SignaturesImpl.apply_update_signature(map_id, sig, %{temporary_name: sync_value})
+              Impl.broadcast!(map_id, :signatures_updated, source_system.solar_system_id)
+
+            _ ->
+              :ok
+          end
+        end)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp get_sync_value(system) do
+    label_val = get_label_value(system.labels)
+    tag_val = system.tag
+
+    cond do
+      not is_nil(label_val) and label_val != "" ->
+        label_val
+
+      not is_nil(tag_val) and tag_val != "" ->
+        tag_val
+
+      true ->
+        nil
+    end
+  end
+
+  defp get_label_value(labels) when is_binary(labels) do
+    case Jason.decode(labels) do
+      {:ok, %{"customLabel" => custom_label}}
+      when is_binary(custom_label) and custom_label != "" ->
+        custom_label
+
+      {:ok, %{"labels" => labels_list}} when is_list(labels_list) ->
+        Enum.at(labels_list, 0)
+
+      _ ->
+        labels
+    end
+  rescue
+    _ -> labels
+  end
+
+  defp get_label_value(_), do: nil
 end
