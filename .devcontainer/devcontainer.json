@@ -7,8 +7,8 @@
   "service": "wanderer",
   "workspaceFolder": "/app",
   "shutdownAction": "stopCompose",
-  "remoteUser": "developer",
-  "containerUser": "developer",
+  "remoteUser": "root",
+  "containerUser": "root",
 
   "postCreateCommand": "bash .devcontainer/setup.sh",
   "postStartCommand": "bash .devcontainer/post-start.sh",
