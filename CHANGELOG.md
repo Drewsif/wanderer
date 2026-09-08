@@ -2,6 +2,15 @@
 
 <!-- changelog -->
 
+## [v1.102.0](https://github.com/wanderer-industries/wanderer/compare/v1.101.14...v1.102.0) (2026-09-08)
+
+
+
+
+### Features:
+
+* map: automatically sync system tags and labels to linked signature temporary names
+
 ## [v1.101.14](https://github.com/wanderer-industries/wanderer/compare/v1.101.13...v1.101.14) (2026-09-03)
 
 
