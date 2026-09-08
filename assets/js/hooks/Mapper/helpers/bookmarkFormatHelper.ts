@@ -277,12 +277,12 @@ export const calculateBookmarkIndex = (
   const uniqueCurrentSigs = Array.from(new Map(currentSigsRaw.map(sig => [sig.eve_id, sig])).values());
 
   const existingIndices = uniqueCurrentSigs
-    .filter(sig => sig.eve_id !== currentEveId && sig.linked_system != null)
+    .filter(sig => sig.eve_id !== currentEveId && sig.group === SignatureGroup.Wormhole)
     .map(sig => parseSignatureCustomInfo(sig.custom_info).bookmark_index)
     .filter((i): i is number => typeof i === 'number' && i >= 0);
 
   const signatureChainedTags = uniqueCurrentSigs
-    .filter(sig => sig.eve_id !== currentEveId && sig.linked_system != null)
+    .filter(sig => sig.eve_id !== currentEveId && sig.group === SignatureGroup.Wormhole)
     .map(sig => {
       const info = parseSignatureCustomInfo(sig.custom_info);
       return [info.bookmark_index_chained, info.bookmark_index_chained_letters];
