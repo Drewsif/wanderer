@@ -603,6 +603,9 @@ export const handleAutoBookmark = async (
   let updatedSignature = signature;
   let shouldUpdate = false;
 
+  const currentSystem = systems.find(s => s.id === currentSystemId);
+  const currentSystemStatics = currentSystem?.system_static_info?.statics;
+
   if (
     signature.group !== SignatureGroup.Wormhole ||
     (!settings?.bookmark_name_format && !settings?.bookmark_auto_temp_name)
