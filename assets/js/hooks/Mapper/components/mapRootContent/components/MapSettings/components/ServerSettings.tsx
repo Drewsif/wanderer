@@ -9,12 +9,16 @@ import { useConfirmPopup } from '@/hooks/Mapper/hooks';
 import { RemoteAdminSettingsResponse } from '@/hooks/Mapper/mapRootProvider/types.ts';
 import { applyMigrations } from '@/hooks/Mapper/mapRootProvider/migrations';
 import { WdButton } from '@/hooks/Mapper/components/ui-kit';
+import { useMapSettings } from '@/hooks/Mapper/components/mapRootContent/components/MapSettings/MapSettingsProvider.tsx';
+import { parseMapUserSettings } from '@/hooks/Mapper/components/helpers';
 
 export const ServerSettings = () => {
   const {
     storedSettings: { applySettings },
     outCommand,
   } = useMapRootState();
+
+  const { setUserRemoteSettings } = useMapSettings();
 
   const [hasSettings, setHasSettings] = useState(false);
   const { cfShow, cfHide, cfVisible, cfRef } = useConfirmPopup();
@@ -35,7 +39,14 @@ export const ServerSettings = () => {
 
     try {
       //INFO: INSTEAD CHECK WE WILL TRY TO APPLY MIGRATION
-      applySettings(applyMigrations(JSON.parse(res.default_settings)) || createDefaultStoredSettings());
+      const parsed = parseMapUserSettings(res.default_settings);
+
+      if (parsed.userSettings) {
+        setUserRemoteSettings(old => ({ ...old, ...parsed.userSettings }));
+        outCommand({ type: OutCommand.updateUserSettings, data: parsed.userSettings }).catch(() => {});
+      }
+
+      applySettings(applyMigrations(parsed) || createDefaultStoredSettings());
       callToastSuccess(toast.current, 'Settings synchronized successfully');
     } catch (error) {
       applySettings(createDefaultStoredSettings());

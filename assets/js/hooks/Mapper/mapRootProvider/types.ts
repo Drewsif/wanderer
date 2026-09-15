@@ -109,6 +109,8 @@ export type JumpPlannerSettings = {
 
 export type SettingsWrapper<T> = T;
 
+import { UserSettingsRemote } from '@/hooks/Mapper/components/mapRootContent/components/MapSettings/types.ts';
+
 export type MapUserSettings = {
   migratedFromOld: boolean;
   version: number;
@@ -122,6 +124,7 @@ export type MapUserSettings = {
   killsWidget: SettingsWrapper<KillsWidgetSettings>;
   map: SettingsWrapper<MapSettings>;
   jumpPlanner: SettingsWrapper<JumpPlannerSettings>;
+  userSettings?: Partial<UserSettingsRemote>;
 };
 
 export type MapUserSettingsStructure = {
