@@ -236,6 +236,10 @@ defmodule WandererApp.Api.MapSystem do
                  required?: false
     end
 
+    read :unfiltered_read do
+      # Bypasses actor checks for backend use
+    end
+
     read :get_by_id do
       argument(:id, :string, allow_nil?: false)
       filter(expr(id == ^arg(:id)))
