@@ -12,6 +12,7 @@ import { useDetectSettingsChanged } from '@/hooks/Mapper/components/hooks';
 import { WdButton } from '@/hooks/Mapper/components/ui-kit';
 import { useMapSettings } from '@/hooks/Mapper/components/mapRootContent/components/MapSettings/MapSettingsProvider.tsx';
 import { UserSettingsRemoteList } from '@/hooks/Mapper/components/mapRootContent/components/MapSettings/constants.ts';
+import { UserSettingsRemote } from '@/hooks/Mapper/components/mapRootContent/components/MapSettings/types.ts';
 
 export const AdminSettings = () => {
   const {
@@ -58,12 +59,12 @@ export const AdminSettings = () => {
     if (!localCurrentStr) return false;
 
     const localCurrent = parseMapUserSettings(localCurrentStr);
-    localCurrent.userSettings = UserSettingsRemoteList.reduce((acc, prop) => {
+    localCurrent.userSettings = UserSettingsRemoteList.reduce<Record<string, unknown>>((acc, prop) => {
       if (settings[prop] !== undefined) {
         acc[prop] = settings[prop];
       }
       return acc;
-    }, {} as any);
+    }, {}) as Partial<UserSettingsRemote>;
 
     return !fastDeepEqual(currentRemoteSettings, localCurrent);
     // eslint-disable-next-line
@@ -79,12 +80,12 @@ export const AdminSettings = () => {
     }
 
     const baseSettings = JSON.parse(settingsStr);
-    baseSettings.userSettings = UserSettingsRemoteList.reduce((acc, prop) => {
+    baseSettings.userSettings = UserSettingsRemoteList.reduce<Record<string, unknown>>((acc, prop) => {
       if (settings[prop] !== undefined) {
         acc[prop] = settings[prop];
       }
       return acc;
-    }, {} as any);
+    }, {}) as Partial<UserSettingsRemote>;
 
     const settingsToSave = JSON.stringify(baseSettings);
 
