@@ -6,6 +6,8 @@ defmodule WandererApp.Character.TrackerManager.Impl do
   - Starting/stopping character tracking
   - Garbage collection of inactive trackers (5-minute timeout)
   - Processing the untrack queue (5-minute interval)
+  - Re-tracking characters missing from every tracker pool (1-minute interval), e.g.
+    after the tracker pool supervisor restarted and lost all pools
 
   ## Logging
 
@@ -17,18 +19,30 @@ defmodule WandererApp.Character.TrackerManager.Impl do
 
   defstruct [
     :characters,
-    :opts
+    :opts,
+    missing_from_pools: MapSet.new(),
+    consumers: %{}
   ]
 
   @type t :: %__MODULE__{
           characters: [integer],
-          opts: map
+          opts: map,
+          missing_from_pools: MapSet.t(),
+          consumers: %{
+            optional(term()) => %{
+              monitor_ref: reference() | nil,
+              monitor_pid: pid() | nil,
+              character_ids: MapSet.t(binary()),
+              profile: :fast | :slow
+            }
+          }
         }
 
   @check_start_queue_interval :timer.seconds(1)
   @garbage_collection_interval :timer.minutes(5)
   @untrack_characters_interval :timer.minutes(5)
   @inactive_character_timeout :timer.minutes(5)
+  @verify_tracker_pools_interval :timer.minutes(1)
 
   @logger Application.compile_env(:wanderer_app, :logger)
 
@@ -39,6 +53,7 @@ defmodule WandererApp.Character.TrackerManager.Impl do
     Process.send_after(self(), :check_start_queue, @check_start_queue_interval)
     Process.send_after(self(), :garbage_collect, @garbage_collection_interval)
     Process.send_after(self(), :untrack_characters, @untrack_characters_interval)
+    Process.send_after(self(), :verify_tracker_pools, @verify_tracker_pools_interval)
 
     Logger.debug(
       "[TrackerManager] Initialized with intervals: " <>
@@ -49,7 +64,8 @@ defmodule WandererApp.Character.TrackerManager.Impl do
 
     %{
       characters: [],
-      opts: args
+      opts: args,
+      consumers: %{}
     }
     |> new()
   end
@@ -64,13 +80,66 @@ defmodule WandererApp.Character.TrackerManager.Impl do
       )
     end
 
-    tracked_characters
-    |> Enum.each(fn character_id ->
-      start_tracking(state, character_id)
-    end)
+    state = restore_page_consumers(state, tracked_characters)
+
+    Enum.each(tracked_characters, &start_tracking(state, &1))
 
     state
   end
+
+  defp restore_page_consumers(state, character_ids) do
+    # Collect every cached membership before checking the page PID. If the page
+    # dies during collection, we can either remove the complete set immediately
+    # or monitor the complete set and let the resulting :DOWN clean it up.
+    character_ids
+    |> Enum.reduce(%{}, &collect_page_consumers/2)
+    |> Enum.reduce(state, fn {consumer_id, consumer}, state ->
+      character_ids = MapSet.to_list(consumer.character_ids)
+
+      if local_process_alive?(consumer.monitor_pid) do
+        register_consumer(
+          state,
+          character_ids,
+          consumer_id,
+          consumer.profile,
+          consumer.monitor_pid
+        )
+      else
+        Enum.each(
+          character_ids,
+          &update_consumer(&1, consumer_id, consumer.profile, false)
+        )
+
+        state
+      end
+    end)
+  end
+
+  defp collect_page_consumers(character_id, consumers) do
+    case WandererApp.Character.get_character_state(character_id, false) do
+      {:ok, %{consumers: character_consumers}} when is_map(character_consumers) ->
+        Enum.reduce(character_consumers, consumers, fn
+          {{:characters_page, pid} = consumer_id, profile}, consumers
+          when is_pid(pid) and profile in [:fast, :slow] ->
+            Map.update(
+              consumers,
+              consumer_id,
+              %{character_ids: MapSet.new([character_id]), monitor_pid: pid, profile: profile},
+              fn consumer ->
+                %{consumer | character_ids: MapSet.put(consumer.character_ids, character_id)}
+              end
+            )
+
+          _consumer, consumers ->
+            consumers
+        end)
+
+      _ ->
+        consumers
+    end
+  end
+
+  defp local_process_alive?(pid), do: node(pid) == node() and Process.alive?(pid)
 
   def start_tracking(state, character_id) do
     if not WandererApp.Cache.has_key?("#{character_id}:track_requested") do
@@ -96,6 +165,8 @@ defmodule WandererApp.Character.TrackerManager.Impl do
   end
 
   def stop_tracking(state, character_id) do
+    state = forget_character_consumers(state, character_id)
+
     with {:ok, characters} <- WandererApp.Cache.lookup("tracked_characters", []),
          true <- Enum.member?(characters, character_id),
          false <- WandererApp.Cache.has_key?("#{character_id}:track_requested") do
@@ -156,8 +227,8 @@ defmodule WandererApp.Character.TrackerManager.Impl do
       remove_from_untrack_queue(map_id, character_id)
 
       case WandererApp.Character.Tracker.update_settings(character_id, track_settings) do
-        {:ok, character_state} ->
-          WandererApp.Character.update_character_state(character_id, character_state)
+        {:ok, _character_state} ->
+          :ok
 
         {:error, :not_found} ->
           # Tracker process not running yet - this is expected during initial tracking setup
@@ -226,6 +297,56 @@ defmodule WandererApp.Character.TrackerManager.Impl do
     {characters, state}
   end
 
+  def register_consumer(state, character_ids, consumer_id, profile, monitor_pid)
+      when is_list(character_ids) and profile in [:fast, :slow] do
+    character_ids = MapSet.new(character_ids)
+
+    previous_character_ids =
+      state.consumers
+      |> Map.get(consumer_id, %{character_ids: MapSet.new()})
+      |> Map.fetch!(:character_ids)
+
+    consumer =
+      case Map.get(state.consumers, consumer_id) do
+        nil ->
+          %{
+            monitor_ref: maybe_monitor(monitor_pid),
+            monitor_pid: monitor_pid,
+            character_ids: character_ids,
+            profile: profile
+          }
+
+        existing ->
+          existing
+          |> maybe_replace_monitor(monitor_pid)
+          |> Map.merge(%{character_ids: character_ids, profile: profile})
+      end
+
+    character_ids
+    |> Enum.each(fn character_id ->
+      start_tracking(state, character_id)
+      update_consumer(character_id, consumer_id, profile, true)
+    end)
+
+    previous_character_ids
+    |> MapSet.difference(character_ids)
+    |> Enum.each(&update_consumer(&1, consumer_id, profile, false))
+
+    %{state | consumers: Map.put(state.consumers, consumer_id, consumer)}
+  end
+
+  def unregister_consumer(state, consumer_id) do
+    case Map.pop(state.consumers, consumer_id) do
+      {nil, _consumers} ->
+        state
+
+      {%{monitor_ref: monitor_ref, character_ids: character_ids, profile: profile}, consumers} ->
+        maybe_demonitor(monitor_ref)
+        Enum.each(character_ids, &update_consumer(&1, consumer_id, profile, false))
+        %{state | consumers: consumers}
+    end
+  end
+
   def handle_event({ref, result}, state) do
     Process.demonitor(ref, [:flush])
 
@@ -264,6 +385,15 @@ defmodule WandererApp.Character.TrackerManager.Impl do
     end)
 
     state
+  end
+
+  def handle_info({:DOWN, monitor_ref, :process, _consumer_pid, _reason}, state) do
+    case Enum.find(state.consumers, fn {_consumer_id, consumer} ->
+           consumer.monitor_ref == monitor_ref
+         end) do
+      {consumer_id, _consumer} -> unregister_consumer(state, consumer_id)
+      nil -> state
+    end
   end
 
   def handle_info(
@@ -367,7 +497,7 @@ defmodule WandererApp.Character.TrackerManager.Impl do
         WandererApp.Cache.delete("map:#{map_id}:character:#{character_id}:station_id")
         WandererApp.Cache.delete("map:#{map_id}:character:#{character_id}:structure_id")
 
-        {:ok, character_state} =
+        {:ok, _character_state} =
           WandererApp.Character.Tracker.update_settings(character_id, %{
             map_id: map_id,
             track: false
@@ -385,7 +515,6 @@ defmodule WandererApp.Character.TrackerManager.Impl do
             station_id: character.station_id
           })
 
-        WandererApp.Character.update_character_state(character_id, character_state)
         WandererApp.Map.Server.Impl.broadcast!(map_id, :untrack_character, character_id)
 
         # Emit telemetry for untrack event
@@ -419,6 +548,46 @@ defmodule WandererApp.Character.TrackerManager.Impl do
     end)
 
     state
+  end
+
+  # A character in "tracked_characters" must be held by some tracker pool. If it is not
+  # (pool crashed past restart limits and TrackerPoolSupervisor restarted with no pools),
+  # nothing else re-tracks it because track_character/2 skips already tracked characters.
+  # Only re-track characters missing on two consecutive checks, so an in-flight
+  # {:add_tracked_id, _} cast is not mistaken for a lost character.
+  def handle_info(:verify_tracker_pools, state) do
+    Process.send_after(self(), :verify_tracker_pools, @verify_tracker_pools_interval)
+
+    {:ok, characters} = WandererApp.Cache.lookup("tracked_characters", [])
+    pooled = WandererApp.Character.TrackerPoolDynamicSupervisor.tracked_ids()
+
+    missing =
+      characters
+      |> Enum.reject(&MapSet.member?(pooled, &1))
+      |> MapSet.new()
+
+    lost = MapSet.intersection(missing, state.missing_from_pools)
+
+    if MapSet.size(lost) > 0 do
+      Logger.warning(
+        "[TrackerManager] Re-tracking #{MapSet.size(lost)} characters missing from tracker pools"
+      )
+
+      Enum.each(lost, &WandererApp.Character.TrackerPoolDynamicSupervisor.start_tracking/1)
+
+      :telemetry.execute(
+        [:wanderer_app, :character, :tracker, :pool_recovery],
+        %{recovered_count: MapSet.size(lost), total_tracked: length(characters)},
+        %{}
+      )
+    end
+
+    %{state | missing_from_pools: MapSet.difference(missing, lost)}
+  rescue
+    # Registries are briefly unavailable while TrackerPoolSupervisor restarts
+    error in ArgumentError ->
+      Logger.warning("[TrackerManager] Tracker pool verification skipped: #{inspect(error)}")
+      state
   end
 
   def handle_info({:stop_track, character_id}, state) do
@@ -514,6 +683,32 @@ defmodule WandererApp.Character.TrackerManager.Impl do
 
         WandererApp.Cache.delete("#{character_id}:track_requested")
     end
+  end
+
+  defp update_consumer(character_id, consumer_id, profile, track),
+    do: WandererApp.Character.Tracker.update_consumer(character_id, consumer_id, profile, track)
+
+  defp forget_character_consumers(state, character_id) do
+    consumers =
+      Map.new(state.consumers, fn {consumer_id, consumer} ->
+        {consumer_id,
+         %{consumer | character_ids: MapSet.delete(consumer.character_ids, character_id)}}
+      end)
+
+    %{state | consumers: consumers}
+  end
+
+  defp maybe_monitor(pid) when is_pid(pid), do: Process.monitor(pid)
+  defp maybe_monitor(_pid), do: nil
+
+  defp maybe_demonitor(ref) when is_reference(ref), do: Process.demonitor(ref, [:flush])
+  defp maybe_demonitor(_ref), do: :ok
+
+  defp maybe_replace_monitor(%{monitor_pid: monitor_pid} = consumer, monitor_pid), do: consumer
+
+  defp maybe_replace_monitor(consumer, monitor_pid) do
+    maybe_demonitor(consumer.monitor_ref)
+    %{consumer | monitor_ref: maybe_monitor(monitor_pid), monitor_pid: monitor_pid}
   end
 
   def character_is_present(map_id, character_id) do
