@@ -51,7 +51,7 @@ export const ServerSettings = () => {
     } catch (error) {
       applySettings(createDefaultStoredSettings());
     }
-  }, [applySettings, outCommand]);
+  }, [applySettings, outCommand, setUserRemoteSettings]);
 
   useEffect(() => {
     const load = async () => {

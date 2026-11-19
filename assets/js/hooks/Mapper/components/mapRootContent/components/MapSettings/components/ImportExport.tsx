@@ -9,6 +9,7 @@ import { applyMigrations } from '@/hooks/Mapper/mapRootProvider/migrations';
 import { createDefaultStoredSettings } from '@/hooks/Mapper/mapRootProvider/helpers/createDefaultStoredSettings.ts';
 import { useMapSettings } from '@/hooks/Mapper/components/mapRootContent/components/MapSettings/MapSettingsProvider.tsx';
 import { UserSettingsRemoteList } from '@/hooks/Mapper/components/mapRootContent/components/MapSettings/constants.ts';
+import { UserSettingsRemote } from '@/hooks/Mapper/components/mapRootContent/components/MapSettings/types.ts';
 import { OutCommand } from '@/hooks/Mapper/types';
 import { WdButton } from '@/hooks/Mapper/components/ui-kit';
 import { Dialog } from 'primereact/dialog';
@@ -46,7 +47,7 @@ export const ImportExport = () => {
     try {
       // INFO: WE NOT SUPPORT MIGRATIONS FOR OLD FILES AND Clipboard
       const parsed = parseMapUserSettings(text);
-      
+
       if (parsed.userSettings) {
         setUserRemoteSettings(old => ({ ...old, ...parsed.userSettings }));
         outCommand({ type: OutCommand.updateUserSettings, data: parsed.userSettings }).catch(() => {});
@@ -82,7 +83,7 @@ export const ImportExport = () => {
         life: 3000,
       });
     }
-  }, [applySettings]);
+  }, [applySettings, outCommand, setUserRemoteSettings]);
 
   const handleImportFromFile = useCallback(async () => {
     try {
@@ -122,7 +123,7 @@ export const ImportExport = () => {
         life: 3000,
       });
     }
-  }, [applySettings]);
+  }, [applySettings, outCommand, setUserRemoteSettings]);
 
   const handleExportToClipboard = useCallback(async () => {
     const settingsStr = getSettingsForExport();
@@ -132,12 +133,12 @@ export const ImportExport = () => {
 
     try {
       const baseSettings = JSON.parse(settingsStr);
-      baseSettings.userSettings = UserSettingsRemoteList.reduce((acc, prop) => {
+      baseSettings.userSettings = UserSettingsRemoteList.reduce<Record<string, unknown>>((acc, prop) => {
         if (settings[prop] !== undefined) {
           acc[prop] = settings[prop];
         }
         return acc;
-      }, {} as any);
+      }, {}) as Partial<UserSettingsRemote>;
 
       await navigator.clipboard.writeText(JSON.stringify(baseSettings));
       toast.current?.show({
@@ -155,7 +156,7 @@ export const ImportExport = () => {
         life: 3000,
       });
     }
-  }, [getSettingsForExport]);
+  }, [getSettingsForExport, settings]);
 
   const handleExportToFile = useCallback(async () => {
     const settingsStr = getSettingsForExport();
@@ -165,12 +166,12 @@ export const ImportExport = () => {
 
     try {
       const baseSettings = JSON.parse(settingsStr);
-      baseSettings.userSettings = UserSettingsRemoteList.reduce((acc, prop) => {
+      baseSettings.userSettings = UserSettingsRemoteList.reduce<Record<string, unknown>>((acc, prop) => {
         if (settings[prop] !== undefined) {
           acc[prop] = settings[prop];
         }
         return acc;
-      }, {} as any);
+      }, {}) as Partial<UserSettingsRemote>;
 
       saveTextFile(`map_settings_${map_slug}.json`, JSON.stringify(baseSettings));
 
@@ -189,7 +190,7 @@ export const ImportExport = () => {
         life: 3000,
       });
     }
-  }, [getSettingsForExport, map_slug]);
+  }, [getSettingsForExport, map_slug, settings]);
 
   const handleExportMapData = useCallback(async () => {
     setMapDataBusy(true);
