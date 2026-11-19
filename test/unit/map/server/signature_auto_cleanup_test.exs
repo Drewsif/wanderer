@@ -5,8 +5,8 @@ defmodule WandererApp.Map.Server.SignatureAutoCleanupTest do
   use WandererApp.DataCase, async: false
 
   alias WandererApp.Api.{MapSystem, MapSystemSignature}
-  alias WandererApp.Map.Server.SignaturesImpl
   alias WandererApp.Map.GarbageCollector
+  alias WandererApp.Map.Server.SignaturesImpl
   alias WandererAppWeb.Factory
 
   import Mox
@@ -108,8 +108,8 @@ defmodule WandererApp.Map.Server.SignatureAutoCleanupTest do
 
       {:ok, sig} = MapSystemSignature.create(sig_params)
 
-      # Wait! We need to run apply_update_signature to test our logic since creation in ash directly doesn't do it automatically
-      # unless we call the server's update method or we test apply_update_signature directly.
+      # Run apply_update_signature to test our logic since direct Ash creation doesn't compute expires_at
+      # unless we call the server's update method or test apply_update_signature directly.
       :ok = SignaturesImpl.apply_update_signature(map.id, sig, %{custom_info: custom_info})
 
       updated_sig = MapSystemSignature.by_id!(sig.id)
