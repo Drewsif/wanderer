@@ -371,27 +371,48 @@ defmodule WandererApp.Map.Server.CharactersImpl do
   def reconcile_tracking(map_id) do
     with {:ok, tracked_settings} <-
            WandererApp.MapCharacterSettingsRepo.get_tracked_by_map_all(map_id) do
-      Enum.each(tracked_settings, fn setting ->
-        cache_key = "character:#{setting.character_id}:map:#{map_id}:tracking_start_time"
+      db_tracked_ids =
+        tracked_settings
+        |> Enum.map(fn s -> s.character_id end)
 
-        case WandererApp.Cache.lookup(cache_key, nil) do
-          {:ok, nil} ->
-            Logger.info(fn ->
-              "[TrackingReconciliation] Map #{map_id} - restoring tracking for character #{setting.character_id} " <>
-                "with tracked=true in DB but missing cache key."
-            end)
+      # Only consider characters that are currently present on the map
+      {:ok, presence_character_ids} =
+        WandererApp.Cache.lookup("map_#{map_id}:presence_character_ids", [])
 
-            WandererApp.Cache.put(
-              cache_key,
-              DateTime.utc_now()
-            )
+      presence_set = MapSet.new(presence_character_ids)
 
-            WandererApp.Character.TrackerManager.start_tracking(setting.character_id)
+      # Filter to characters that are present AND missing the tracking cache key
+      present_tracked_ids =
+        db_tracked_ids
+        |> Enum.filter(fn character_id -> MapSet.member?(presence_set, character_id) end)
 
-          _ ->
-            :ok
-        end
-      end)
+      restored =
+        present_tracked_ids
+        |> Enum.filter(fn character_id ->
+          cache_key = "character:#{character_id}:map:#{map_id}:tracking_start_time"
+          {:ok, val} = WandererApp.Cache.lookup(cache_key, nil)
+          is_nil(val)
+        end)
+
+      if length(restored) > 0 do
+        Logger.info(fn ->
+          "[TrackingReconciliation] Map #{map_id} - restoring #{length(restored)} characters " <>
+            "with tracked=true in DB, present in map, but missing cache key: #{inspect(restored)}"
+        end)
+
+        Enum.each(restored, fn character_id ->
+          WandererApp.Cache.put(
+            "character:#{character_id}:map:#{map_id}:tracking_start_time",
+            DateTime.utc_now()
+          )
+        end)
+
+        :telemetry.execute(
+          [:wanderer_app, :map, :tracking_reconciliation, :restored],
+          %{restored_count: length(restored), system_time: System.system_time()},
+          %{map_id: map_id, character_ids: restored}
+        )
+      end
 
       # Location/ship polling is driven by the tracker's map consumer, not the
       # cache key, so re-register consumers that went missing (e.g. after the
@@ -843,12 +864,7 @@ defmodule WandererApp.Map.Server.CharactersImpl do
              solar_system_id: character.solar_system_id,
              structure_id: character.structure_id,
              station_id: character.station_id
-           },
-           %{
-             solar_system_id: old_solar_system_id,
-             structure_id: old_structure_id,
-             station_id: old_station_id
-           }}
+           }, %{solar_system_id: old_solar_system_id}}
           | updates
         ],
         cache_updates
@@ -916,26 +932,12 @@ defmodule WandererApp.Map.Server.CharactersImpl do
   end
 
   defp update_location(
-         %{map: map, map_id: map_id, map_opts: map_opts} =
-           _state,
-         character_id,
-         location,
-         %{solar_system_id: nil} = old_location
-       ) do
-    scopes = get_effective_scopes(map)
-
-    if ConnectionsImpl.can_add_location(scopes, location.solar_system_id) do
-      case SystemsImpl.maybe_add_system(map_id, location, old_location, map_opts, scopes) do
-        :ok ->
-          :ok
-
-        {:error, error} ->
-          Logger.error(
-            "[CharacterTracking] Failed to add initial location system #{location.solar_system_id} for character #{character_id} on map #{map_id}: #{inspect(error)}"
-          )
-      end
-    end
-  end
+         _state,
+         _character_id,
+         _location,
+         %{solar_system_id: nil}
+       ),
+       do: :ok
 
   defp update_location(
          %{map: map, map_id: map_id, map_opts: map_opts} =
@@ -1012,8 +1014,8 @@ defmodule WandererApp.Map.Server.CharactersImpl do
     end
   end
 
-  defp is_character_in_space?(location),
-    do: is_nil(Map.get(location, :structure_id)) && is_nil(Map.get(location, :station_id))
+  defp is_character_in_space?(%{station_id: station_id, structure_id: structure_id} = _location),
+    do: is_nil(structure_id) && is_nil(station_id)
 
   @doc """
   Get effective scopes from map, with fallback to legacy scope.
